@@ -563,7 +563,6 @@ local function NewArc(holder, withLayers)
             if self.capOn then ConfigureCap(self.cap, S, span, diameter, inner) end
         end
         self:ConfigureRound(rampPath, path)
-        self.durKey = nil
         self:Apply()
     end
 
@@ -656,13 +655,18 @@ local function NewArc(holder, withLayers)
     function arc:SetShown(on) self.shown = on; self:Apply() end
     function arc:SetShift(on) self.shift = on; self:Apply() end
 
+    -- fn(texture, piece): the piece carries its own alpha gate (piece.alphaPts).
     function arc:Layer(name, fn)
-        for _, ch in ipairs(self:Pieces()) do local t = ch.layers[name]; if t then fn(t) end end
+        for _, ch in ipairs(self:Pieces()) do local t = ch.layers[name]; if t then fn(t, ch) end end
     end
 
-    -- Uniform colour on a layer.
+    -- Uniform colour on a layer. ★ Colour ONLY — no alpha argument: passing
+    -- SetVertexColor a 4th value of 1 landed as the layer's OPACITY on 12.1
+    -- (measured 2026-09-20: the cast ring's per-tick recolour lifted the
+    -- empty second chunk's base to alpha 1 and drew its 1.5° lead overlap as
+    -- a slice at the boundary, while the gate still held every other layer).
     function arc:SetColor(name, r, g, b)
-        self:Layer(name, function(t) t:SetVertexColor(r, g, b, 1) end)
+        self:Layer(name, function(t) t:SetVertexColor(r, g, b) end)
     end
 
     -- The base: one colour, or colour → colour2 along `angleDeg` (0 = left
@@ -699,7 +703,12 @@ local function NewArc(holder, withLayers)
         if power ~= nil then return UnitPowerPercent(unit, power, true, curve) end
         return UnitHealthPercent(unit, true, curve)
     end
+    -- ★ Every driver returns early on an arc that was never Configured: the
+    -- health ring's shield copy exists from creation but is only configured
+    -- while "Tint while shielded" is on, and Refresh empties every arc when
+    -- the unit does not exist (41× "alphaPts nil", 2026-09-20).
     function arc:SetFromUnit(unit, power)
+        if not self.geo then return end
         for k = 1, self.n do
             local ch = self.chunks[k]
             ch.rot:SetRotation(P(unit, power, ch.rotCurve))
@@ -726,59 +735,50 @@ local function NewArc(holder, withLayers)
         end
     end
 
-    -- Drive from a duration object whose TOTAL is plain: every point list is
-    -- re-expressed over REMAINING seconds (x → T·(1−x), or T·x when the arc
-    -- drains) and evaluated engine-side. Cached per (T, drains).
-    function arc:SetFromDuration(d, T, drains)
-        local key = T .. (drains and "d" or "f")
-        if self.durKey ~= key then
-            self.durKey = key
-            local function conv(pts)
-                local out = {}
-                for _, pt in ipairs(pts) do
-                    local rem = drains and (T * pt[1]) or (T * (1 - pt[1]))
-                    out[#out + 1] = { rem, pt[2] }
-                end
-                table.sort(out, function(a, b) return a[1] < b[1] end)
-                return CurveFrom(out)
-            end
-            self.durCurves = {}
-            for k = 1, self.n do
-                local ch = self.chunks[k]
-                local c = { rot = conv(ch.rotPts), alpha = {} }
-                for name in pairs(ch.layers) do c.alpha[name] = conv(ch.alphaPts[name]) end
-                self.durCurves[k] = c
-            end
-            local rd = self.round
-            self.durCurves.startAlpha, self.durCurves.endAlpha = {}, {}
-            for name in pairs(rd.startCap.layers) do self.durCurves.startAlpha[name] = conv(rd.startCap.alphaPts[name]) end
-            for name in pairs(rd.endCap.layers) do self.durCurves.endAlpha[name] = conv(rd.endCap.alphaPts[name]) end
-            if rd.endCap.rotPts then self.durCurves.endRot = conv(rd.endCap.rotPts) end
-        end
-        local dc = self.durCurves
+    -- Drive from a DURATION OBJECT (a target's cast on a restricted map: start,
+    -- end AND total all secret — measured in a delve 2026-09-20). The object
+    -- evaluates a curve over its own 0..1 FRACTION engine-side —
+    -- EvaluateElapsedPercent for a cast that fills, EvaluateRemainingPercent
+    -- for a channel that drains — so the very curves SetFromUnit hands to
+    -- UnitHealthPercent serve unchanged, and no total is ever needed. (OPie's
+    -- cooldown spiral uses the same door; EUI's bar gets it for free through
+    -- StatusBar:SetTimerDuration, which a masked arc cannot use.)
+    -- ★ A rotation evaluation takes NO second argument: the evaluators'
+    -- optional "modifier" is validated to 0..1 (an alpha default passes; an
+    -- angle in radians is refused — "bad argument #3", 2026-09-20).
+    function arc:SetFromDuration(d, drains)
+        if not self.geo then return end
+        local m = drains and d.EvaluateRemainingPercent or d.EvaluateElapsedPercent
+        local function D(curve, default) return m(d, curve, default) end
         for k = 1, self.n do
             local ch = self.chunks[k]
-            ch.rot:SetRotation(d:EvaluateRemainingDuration(dc[k].rot, ch.y(0)))
+            ch.rot:SetRotation(m(d, ch.rotCurve))
             for name, tex in pairs(ch.layers) do
-                if tex:IsShown() then tex:SetAlpha(d:EvaluateRemainingDuration(dc[k].alpha[name], ALPHA_OFF)) end
+                if tex:IsShown() then tex:SetAlpha(D(ch.alphaCurve[name], ALPHA_OFF)) end
+            end
+        end
+        if self.capOn then
+            for name, tex in pairs(self.cap.layers) do
+                if tex:IsShown() then tex:SetAlpha(D(self.cap.alphaCurve[name], ALPHA_OFF)) end
             end
         end
         local rd = self.round
         if self.roundStart then
             for name, tex in pairs(rd.startCap.layers) do
-                if tex:IsShown() then tex:SetAlpha(d:EvaluateRemainingDuration(dc.startAlpha[name], ALPHA_OFF)) end
+                if tex:IsShown() then tex:SetAlpha(D(rd.startCap.alphaCurve[name], ALPHA_OFF)) end
             end
         end
         if self.roundEnd then
-            if dc.endRot then rd.endCap.mask:SetRotation(d:EvaluateRemainingDuration(dc.endRot, 0), rd.endCap.pivot) end
+            if rd.endCap.rotCurve then rd.endCap.mask:SetRotation(m(d, rd.endCap.rotCurve), rd.endCap.pivot) end
             for name, tex in pairs(rd.endCap.layers) do
-                if tex:IsShown() then tex:SetAlpha(d:EvaluateRemainingDuration(dc.endAlpha[name], ALPHA_OFF)) end
+                if tex:IsShown() then tex:SetAlpha(D(rd.endCap.alphaCurve[name], ALPHA_OFF)) end
             end
         end
     end
 
     -- Drive from a plain 0..1 (the track, and the no-unit state).
     function arc:SetFromPlain(pct, alphaScale)
+        if not self.geo then return end
         pct = clamp(pct, 0, 1)
         for k = 1, self.n do
             local ch = self.chunks[k]
@@ -1250,10 +1250,11 @@ end
 ------------------------------------------------------------------------
 -- Casting. The player's cast times are PLAIN (measured 2026-09-19: name,
 -- start, end, the duration object's total and remaining), so the ring is
--- ordinary clock arithmetic per frame. A target's may be secret on a
--- restricted map (untested): then the duration object drives the curves
--- through EvaluateRemainingDuration — if even its TOTAL is secret the ring
--- stays hidden rather than guess.
+-- ordinary clock arithmetic per frame. A target's ARE secret on a restricted
+-- map — start, end and total alike (delve, 2026-09-20) — so there the duration
+-- object drives the ring's percent curves itself, through
+-- EvaluateElapsedPercent / EvaluateRemainingPercent (arc:SetFromDuration).
+-- The ring hides only if no duration object exists at all.
 ------------------------------------------------------------------------
 local function CastState(unit)
     local name, _, _, startMS, endMS, _, _, notInterruptible = UnitCastingInfo(unit)
@@ -1296,7 +1297,7 @@ end
 -- Mid-cast: the kick's cooldown object evaluated against "back before this
 -- cast ends". Only for a cast with PLAIN times and a PLAIN interruptible
 -- flag (a secret flag may not decide what shows).
-local function KickExtras(r, rc, st)
+local function KickExtras(r, rc, st, pct)
     local locked = st.locked
     if not activeKick or not st.plain or (issecretvalue and issecretvalue(locked)) or locked
        or not (rc.midCastEnabled or rc.kickTick) or not C_Spell.GetSpellCooldownDuration then
@@ -1316,7 +1317,17 @@ local function KickExtras(r, rc, st)
         if not fill.shift then fill:SetShift(true) end
         local mc = rc.midCastColor
         fill:SetColor("mid", mc[1], mc[2], mc[3])
-        fill:Layer("mid", function(t) if t:IsShown() then t:SetAlpha(d:EvaluateRemainingDuration(a, ALPHA_OFF)) end end)
+        -- ★ Gated per piece: a piece the fill has not reached (the empty
+        -- second half of a 360° ring, a cap) shows nothing but its 1.5° lead
+        -- overlap at the boundary, and painting the tint there put an orange
+        -- slice at 12 o'clock (measured 2026-09-20). The cast percent is PLAIN
+        -- on this path, so the piece's own base gate decides in Lua.
+        fill:Layer("mid", function(t, piece)
+            if not t:IsShown() then return end
+            local gate = piece.alphaPts and piece.alphaPts.base and Eval(piece.alphaPts.base, pct) or ALPHA_OFF
+            if gate <= ALPHA_OFF then t:SetAlpha(ALPHA_OFF)
+            else t:SetAlpha(d:EvaluateRemainingDuration(a, ALPHA_OFF)) end
+        end)
         fill:Layer("low", function(t) if t:IsShown() then t:SetAlpha(ALPHA_OFF) end end)
     elseif fill.shift then
         fill:SetShift(false)
@@ -1345,7 +1356,11 @@ local function KickExtras(r, rc, st)
         table.sort(xs)
         local pts, last = {}, nil
         for _, x in ipairs(xs) do if x ~= last then pts[#pts + 1] = { x, ang(x) }; last = x end end
-        tick:SetRotation(d:EvaluateRemainingDuration(CurveFrom(pts), geo.S), pivot)
+        -- ★ No second argument on a ROTATION evaluation: the "modifier" is
+        -- validated to 0..1 (an alpha passes, an angle in radians is "bad
+        -- argument #3" — measured 2026-09-20, the tick's first outing on a
+        -- class with an interrupt). The alpha curves may keep theirs.
+        tick:SetRotation(d:EvaluateRemainingDuration(CurveFrom(pts)), pivot)
         tick:SetAlpha(d:EvaluateRemainingDuration(a, ALPHA_OFF))
     elseif r.tick then
         r.tick:Hide()
@@ -1366,6 +1381,9 @@ local function CastTick(holder)
     local st = r.cast
     if not st then return end
     GU:RefreshTexts(frames[which], which, "cast")
+    -- Colour first, geometry second: the alpha gate must be the last writer.
+    local kickAware = which == "target" and rc.kickAware and not st.fake
+    if kickAware then r.fill:SetColor("base", KickColor(rc, st.locked)) end
     local p
     if st.plain then
         local now = GetTime() * 1000
@@ -1375,12 +1393,9 @@ local function CastTick(holder)
         if st.channel and rc.channelDrains then p = 1 - p end
         r.fill:SetFromPlain(p)
     elseif st.duration then
-        r.fill:SetFromDuration(st.duration, st.total, st.channel and rc.channelDrains)
+        r.fill:SetFromDuration(st.duration, st.channel and rc.channelDrains)
     end
-    if which == "target" and rc.kickAware and not st.fake then
-        r.fill:SetColor("base", KickColor(rc, st.locked))
-        KickExtras(r, rc, st)
-    end
+    if kickAware then KickExtras(r, rc, st, p or 0) end
 end
 
 function GU:RefreshCast(which)
@@ -1389,6 +1404,7 @@ function GU:RefreshCast(which)
     local rc, r = cfg.rings.cast, f.rings.cast
     if not (rc and r) then return end
     local st = rc.enabled and UnitExists(which) and CastState(which) or nil
+    local route = (not rc.enabled) and "ring switched off" or (not st) and "no cast" or nil   -- for the trace
     if not st and rc.enabled and castPreview[which] then
         local now = GetTime() * 1000
         st = { name = "preview", startMS = now, endMS = now + 5000, channel = false, locked = false, fake = true }
@@ -1398,18 +1414,29 @@ function GU:RefreshCast(which)
         local secretTimes = issecretvalue and (issecretvalue(st.startMS) or issecretvalue(st.endMS))
         if not secretTimes then
             st.plain = true
+            route = "PLAIN times"
         else
             local d = (st.channel and UnitChannelDuration or UnitCastingDuration)(which)
-            local okT, total = pcall(function() return d and d:GetTotalDuration() end)
-            if d and okT and total and not (issecretvalue and issecretvalue(total)) and total > 0 then
-                st.duration, st.total = d, total
+            if d and d.EvaluateElapsedPercent and d.EvaluateRemainingPercent then
+                st.duration = d
+                route = "DURATION object (times secret; drawn from its fraction)"
             else
                 st = nil   -- nothing honest to draw
+                route = d and "HIDDEN — duration object has no percent evaluator" or "HIDDEN — no duration object"
             end
         end
     end
     r.cast = st
     r.casting = st ~= nil
+    -- QA trace (`/gu casttrace`): a target's casts in a delve are too quick to
+    -- catch with `/gu debug target`, so say in chat which route each cast took
+    -- the moment it changes — plain times, the duration object, or hidden.
+    if GU.castTrace and which == "target" and r.lastRoute ~= route then
+        r.lastRoute = route
+        local name = st and st.name
+        if name and issecretvalue and issecretvalue(name) then name = "(secret name)" end
+        Chat(("cast trace: %s%s"):format(route, name and (" — " .. tostring(name)) or ""))
+    end
     -- colour: a target's cast by interrupt state (re-evaluated per tick, the
     -- kick's cooldown moves); otherwise the ring's own colouring
     if st then
@@ -1611,6 +1638,14 @@ local function Debug(which)
         Chat(("%s %s ring: enabled=%s mode=%s shift=%s span=%s start=%s cw=%s chunks=%d shown=%s"):format(
             which, key, tostring(rc.enabled), tostring(rc.colorMode), tostring(rc.shift),
             tostring(rc.span), tostring(rc.start), tostring(rc.clockwise), r.fill.n, tostring(r.fill.shown)))
+        if key == "cast" then
+            -- Which route the cast ring is on: plain clock arithmetic, the engine's
+            -- duration object evaluating the ring's fraction, or nothing honest to draw.
+            local st = r.cast
+            print(("   cast=%s  name=%s  locked=%s  channel=%s"):format(
+                (not st) and "none" or st.plain and "PLAIN times" or "DURATION object (times secret; drawn from its fraction)",
+                st and v(st.name) or "-", st and v(st.locked) or "-", st and v(st.channel) or "-"))
+        end
         if key == "power" then
             local pcol, pType = PowerTypeColor(which)
             local max = UnitPowerMax(which, pType or 0)
@@ -1723,6 +1758,11 @@ SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
     msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     if msg == "debug" then Debug("player") return end
     if msg == "debug target" then Debug("target") return end
+    if msg == "casttrace" then
+        GU.castTrace = not GU.castTrace
+        Chat("cast trace " .. (GU.castTrace and "ON — the target's cast route prints here as it changes" or "off"))
+        return
+    end
     if msg == "probe" then ProbeAbsorb() return end
     if msg == "auras" then
         Chat(("auras: blizzard container addon loaded=%s  createFailed=%s  layoutError=%s  decorateError=%s"):format(

@@ -26,7 +26,7 @@ class-resource and cast displays as ARCS of any span, each placeable, sizeable, 
 colourable. Target: **Midnight 12.1** (Interface `120100`), retail only. Built 2026-09-19 in one
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
-The remaining milestones are Hub BACKLOG item 12.
+The remaining milestones are Hub BACKLOG items 12–15 — **14 (profiles) first**.
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 
@@ -48,9 +48,10 @@ description of the technique; keep it true.** Do not:
 
 ## Shape
 
-- **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` (account-wide,
-  `_version = 1`; `EnsureTexts` / `EnsureAuras` seed the two lists only when the key is ABSENT, so
-  an emptied list stays empty), the arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
+- **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` (⚠ account-wide,
+  `_version = 1` — **ruled WRONG by the owner 2026-09-20**: it becomes per-character profiles via
+  `UI.profileBlock`, Hub BACKLOG item 14, before any other GU work; `EnsureTexts` / `EnsureAuras`
+  seed the two lists only when the key is ABSENT, so an emptied list stays empty), the arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
   `SetFromDuration`; `rampOnly` = the ramp layer alone, a colour fading to transparent), the
   per-unit frames with a ring HOLDER per ring (each ring owns a band of **16** frame levels: track
   +0..+2, fill +3..+6, the health ring's shield copy +11..+14, the kick tick +15; rings in
@@ -62,15 +63,22 @@ description of the technique; keep it true.** Do not:
   `RampAt`), the class-resource
   segments (`LayoutResource`; count = `UnitPowerMax`, hides at 0; Death Knight runes are NOT a
   power type and are unbuilt), the cast ring (`RefreshCast`/`CastTick`: the player's times are
-  PLAIN — clock arithmetic; a target with secret times uses the duration object and hides if even
-  the total is secret), the interrupt colouring (`KickColor`, EUI's spell table; `KickExtras` for
-  the mid-cast tint + the tick, only when the "not interruptible" flag is PLAIN), and a small API
+  PLAIN — clock arithmetic; **a target's are secret in every part on a restricted map**, and the
+  duration object then drives the ring's own percent curves through `EvaluateElapsedPercent` /
+  `EvaluateRemainingPercent` — `arc:SetFromDuration`, Hub FINDINGS §18.10; ★ a ROTATION evaluation
+  takes no second argument, the "modifier" is validated to 0..1 — §18.11), the interrupt colouring
+  (`KickColor`, EUI's spell table, secret-safe; `KickExtras` for the mid-cast tint + the tick, only
+  on a PLAIN-time cast, gated per piece so it never paints empty geometry — §18.12; `arc:SetColor`
+  passes NO alpha, and `CastTick` recolours BEFORE the geometry pass), and a small API
   the tab drives: `Config · ApplyLayout · Nudge · SetStrata · SetCondition · Reset · CopyFrom ·
   SetEditing · SetCastPreview · OnChange · UnitColor · ClassResource · CastInfo`. `/gu debug` /
   `/gu debug target` print every ring's state (secrets print as SECRET; a secret can be READ on
-  screen by rendering it as text); `/gu probe` (the absorb doors, §19), `/gu gate` (the presence
-  gate, three squares), `/gu auras` (per-group container state) and `/gu text [target] <template>`
-  are QA tools kept in the addon because a `/run` over 255 characters does nothing.
+  screen by rendering it as text; the cast ring's line names its route); **`/gu casttrace`** (one
+  chat line per change of the target's cast route — the only way to measure a two-second delve
+  cast); `/gu probe` (the absorb doors, §19), `/gu gate` (the presence gate, three squares),
+  `/gu auras` (per-group container state) and `/gu text [target] <template>` are QA tools kept in
+  the addon because a `/run` over 255 characters does nothing. Every arc driver returns early on
+  an arc that was never `Configure`d (the health ring's shield copy exists before it is on).
 - **`GloomsUnitFrames_Text.lua` — the TEXT PIECES.** `cfg.texts` is a list; each piece is a
   template of words and `[shortcodes]` compiled ONCE into a format string + one reader per code,
   rendered by a single `SetFormattedText` whose arguments may be secret (`AbbreviateNumbers` for
@@ -83,17 +91,25 @@ description of the technique; keep it true.** Do not:
   the catalog) and `spell` (two SLOTS, HELPFUL + HARMFUL, `includeSpellIDs = {[id]=true}`, the
   button glued to a frame we position). Everything on a button is wired in `initializeFrame` and
   nowhere else; the Hub shape mask and the Hub effect are started THERE with no trigger (§20).
+  **A Hub effect runs on the `spell` kind ONLY** — a list group with a stale `effect` field ran
+  one per button (2026-09-20). ⚠ In a fight the button's subtree is a forbidden object and size /
+  position writes are refused; the Hub PARKS such an effect until regen (§20.5, BACKLOG 15).
   A changed filter / size / shape / effect swaps in a fresh container (`Signature`); max count,
   position and effect PARAMS adjust the live one (`LayoutLive`, `RestyleEffects`). Legacy kinds
   (`mydebuffs`…) migrate to filters in `MigrateAuraGroup`.
 - **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
-  order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 4`; bump in the same commit as any newer call).
+  order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 9`; bump in the same commit as any newer call).
   Rail: the mark, Player / Target, **Copy from the other unit** (everything but position), Reset.
   Editor: a GB-style accordion — Position · Layer · Visibility · **Texts** (list + editor, the
-  shortcode help printed from `GU.TEXT_HELP`) · **Auras** (list + editor; a two-column tri-state
-  filter block for Buffs/Debuffs, a schema-driven effect-settings block for This spell, built from
-  `GloomsHub.Effects` params) · one section per ring (the resource section only for Player).
-  ⚠ **The owner finds the tab too STACKED** — Hub BACKLOG item 13 is the compaction pass. Everything applies live; there is no Save. **The tab
+  shortcode list a popover that INSERTS on click) · **Auras** (list + editor; filters behind a cog
+  for Buffs/Debuffs, the schema-driven effect settings behind a cog for This spell) · one section
+  per ring (the resource section only for Player). **Every section body is a `UI.grid`** (two cells
+  per line — the 2026-09-20 compaction, Hub BACKLOG 13): the deep clusters (shield tint, interrupt
+  colouring) sit behind `UI.cog` popovers, one-line conditionals (gradient end, drain shift,
+  breakpoint) appear inline under their switch, and a section's `refresh` ends with
+  `sc.height = g:layout() + 8` so the accordion follows. The file's header comment explains the
+  three tiers; the owner called the result "a little messy" and may mock the tidy pass — ask for
+  the mock first. Everything applies live; there is no Save. **The tab
   is the lock**: `SetEditing(which)` on the container's OnShow makes the selected unit draggable
   with a green outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a
   fake 5s cast on repeat (`SetCastPreview`).

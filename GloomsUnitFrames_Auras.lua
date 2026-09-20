@@ -260,8 +260,12 @@ local function Decorate(button, icon, cd, host, ac, size, live)
         local swipe = cd and hub:ShapeAsset(key, "swipe")
         if swipe and cd.SetSwipeTexture then cd:SetSwipeTexture(swipe) end
     end
+    -- A Hub effect is the THIS SPELL highlight only. A list group can carry a
+    -- stale `effect` (its kind was changed after one was picked) and every one
+    -- of its buttons would run it — measured 2026-09-20 as a Breathe storm on
+    -- a Buffs group whose effect the tab no longer even shows.
     local E = hub and hub.Effects
-    local id = ac.effect
+    local id = ac.kind == "spell" and ac.effect or nil
     if key and id and E and E.Get and E:Get(id) then
         local merged = GU:EffectParams(ac)
         local mod = E:Get(id)
