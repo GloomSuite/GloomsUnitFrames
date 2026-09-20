@@ -1,11 +1,13 @@
 -- ============================================================
 -- GloomsUnitFrames_Tab.lua
 -- The UNIT FRAMES tab of the Suite window, laid out the family way (GB is
--- the reference): a LEFT RAIL (the mark, Player / Target as a selectable
--- list, Reset) and a scrolling RIGHT PANE with the selected unit's settings.
--- No footer: every control applies the moment it moves and the on-screen
--- ring IS the preview. No profile block (two fixed units, one account-wide
--- config — as Portraits). Every widget comes from LibGloomSkin-1.0; the
+-- the reference): a LEFT RAIL (the mark, the PROFILE block, Player / Target
+-- as a selectable list, Copy, Reset) and a scrolling RIGHT PANE with the
+-- selected unit's settings. No footer: every control applies the moment it
+-- moves and the on-screen ring IS the preview. Profiles are per character
+-- like GB's (the owner, 2026-09-20 — the tool shipped account-wide and he
+-- ruled that wrong); the engine holds the plumbing, this file only drives
+-- the shared UI.profileBlock. Every widget comes from LibGloomSkin-1.0; the
 -- engine (GloomsUnitFrames.lua) exposes what this file drives.
 --
 -- LAYOUT (the 2026-09-19 compaction, Hub BACKLOG item 13). The owner: EUI
@@ -19,14 +21,13 @@
 --     color + angle, the drain shift's two colors, the resource breakpoint)
 --     — one line, so it costs nothing to show inline; the grid restacks;
 --   · a COG → POPOVER for a whole cluster behind one switch (the shield
---     tint, the cast ring's interrupt coloring, an effect's own settings,
---     an aura group's filters) — EUI's shape, UI.cog / UI.popover in the Hub.
+--     tint, the cast ring's interrupt coloring, an aura group's filters) — EUI's shape, UI.cog / UI.popover in the Hub.
 -- ============================================================
 
 -- ★ SHARED-TOOLKIT VERSION GATE — GloomsHub/docs/CONTRACTS.md §6. Bump
 -- SKIN_NEEDS in the same commit that first calls a newer widget.
 -- This file needs UI.grid / UI.popover / UI.cog (MINOR 9).
-local SKIN_MAJOR, SKIN_NEEDS = "LibGloomSkin-1.0", 9
+local SKIN_MAJOR, SKIN_NEEDS = "LibGloomSkin-1.0", 10
 
 local Skin, skinMinor = LibStub(SKIN_MAJOR, true)
 if not Skin or (skinMinor or 0) < SKIN_NEEDS then
@@ -123,6 +124,12 @@ local function cNum(g, labelText, minV, maxV, get, apply, tip)
     ebox:SetScript("OnEnterPressed", function(self) self:ClearFocus(); commit(self) end)
     ebox:HookScript("OnEditFocusLost", commit)
     ebox:SetScript("OnEscapePressed", function(self) h:refresh(); self:ClearFocus() end)
+    -- Up / Down (Shift ×10) apply LIVE and the box keeps focus (Hub MINOR 10).
+    ebox.stepper = function(self, delta)
+      local v = tonumber(self:GetText()) or get() or minV
+      apply(math.max(minV, math.min(maxV, math.floor(v + 0.5) + delta)))
+      h:refresh()
+    end
     if tip then attachTip(ebox, labelText, tip) end
     h.box = ebox
   end)
@@ -245,26 +252,72 @@ local function BuildRail(c)
     x       = X,
   })
 
+  -- PROFILE: the suite's one profile control (LibGloomSkin MINOR 3), the
+  -- same block GB / GA / Overlays carry. The library is account-wide and each
+  -- character remembers which one it uses; the engine holds the plumbing.
+  local function collision() return false, "A profile with that name already exists." end
+  local profBlock = UI.profileBlock(rail, W, {
+    noun   = "profile",
+    names  = function() return GU:ProfileNames() end,
+    active = function() return GU:ActiveProfileName() or "?" end,
+    switch = function(v) GU:SetActiveProfile(v) end,
+    users  = function(name) return GU:ProfileUsers(name) end,
+    create = function(name)
+      if not GU:CreateProfile(name) then return collision() end
+      GU:SetActiveProfile(name); return true
+    end,
+    copy = function(name)
+      if not GU:CopyProfile(GU:ActiveProfileName(), name) then return collision() end
+      GU:SetActiveProfile(name); return true
+    end,
+    rename = function(name)
+      if not GU:RenameProfile(GU:ActiveProfileName(), name) then return collision() end
+      return true
+    end,
+    delete = function()
+      local gone = GU:ActiveProfileName()
+      local ok, landedOn = GU:DeleteProfile(gone)
+      if not ok then return false, "Can't delete the last profile." end
+      -- The note line clears on success, so where this character went goes to chat.
+      print(("|cff936bffGloom's Unit Frames:|r deleted profile |cffffffff%s|r — this character is now on |cffffffff%s|r.")
+        :format(gone, tostring(landedOn)))
+      return true
+    end,
+    onChange = function() RefreshEditor(); RefreshList() end,
+    tips = {
+      dropdown = "The active profile for this character. Each character remembers its own; the profile library is shared account-wide.",
+      new      = "Creates a profile with the factory rings, texts and aura groups, and switches to it. To start from THIS look instead, use Copy.",
+      copy     = "Duplicates this profile — both units, everything — and switches to the copy.",
+      rename   = "Renames this profile. Characters using it follow the new name.",
+      delete   = "Deletes this profile (you'll be asked to confirm). Characters using it fall back to another profile. The last profile can't be deleted.",
+    },
+  })
+  profBlock.frame:SetPoint("TOPLEFT", X, -60)
+  E.profBlock = profBlock
+  local unitsTop = 60 + profBlock.height + 14   -- the UNITS list sits under the block
+
   local oh = newText(rail, FONT.head, 12, MUTE, "LEFT")
-  oh:SetPoint("TOPLEFT", X, -62); oh:SetText("UNITS")
+  oh:SetPoint("TOPLEFT", X, -unitsTop); oh:SetText("UNITS")
 
   for i, which in ipairs(GU.UNITS) do
     local row = CreateFrame("Button", nil, rail)
     row:SetSize(W, LIST_ROW_H)
-    row:SetPoint("TOPLEFT", X, -80 - (i - 1) * LIST_ROW_H)
+    row:SetPoint("TOPLEFT", X, -(unitsTop + 18) - (i - 1) * LIST_ROW_H)
     row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetAllPoints()
     row.sel:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.28); row.sel:Hide()
     local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.07)
+    -- Just the name. A right-aligned "which rings are on" summary used to
+    -- share the line and collided with it; the owner asked what it was even
+    -- for (2026-09-20) — the editor says the same thing one click away.
     row.text = newText(row, FONT.body, 12, TEXT, "LEFT"); row.text:SetPoint("LEFT", 8, 0)
     row.text:SetText(UNIT_LABEL[which])
-    row.sub = newText(row, FONT.body, 10.5, MUTE, "RIGHT"); row.sub:SetPoint("RIGHT", -8, 0)
     row:SetScript("OnClick", function() SelectUnit(which) end)
     rows[which] = row
   end
 
   local hint = newText(rail, FONT.body, 10.5, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", X, -80 - 2 * LIST_ROW_H - 10)
-  hint:SetPoint("TOPRIGHT", -X, -80 - 2 * LIST_ROW_H - 10)
+  hint:SetPoint("TOPLEFT", X, -(unitsTop + 18) - 2 * LIST_ROW_H - 10)
+  hint:SetPoint("TOPRIGHT", -X, -(unitsTop + 18) - 2 * LIST_ROW_H - 10)
   hint:SetJustifyH("LEFT")
   hint:SetText("While this tab is open, the selected unit's ring can be dragged on screen. "
     .. "The green outline is its frame; the target ring shows empty until you have a target.")
@@ -298,21 +351,10 @@ end
 
 RefreshList = function()
   for _, which in ipairs(GU.UNITS) do
-    local row, cfg = rows[which], GU:Config(which)
-    if row then
-      row.sel:SetShown(which == selected)
-      if cfg then
-        local on = {}
-        if cfg.rings.health.enabled then on[#on + 1] = "Health" end
-        if cfg.rings.power.enabled then on[#on + 1] = "Power" end
-        if cfg.rings.resource and cfg.rings.resource.enabled then on[#on + 1] = "Resource" end
-        if cfg.rings.cast and cfg.rings.cast.enabled then on[#on + 1] = "Cast" end
-        row.sub:SetText((#on > 0 and table.concat(on, " + ") or "Off") .. " · " .. (COND_LABEL[cfg.showCondition] or "Always"))
-      else
-        row.sub:SetText("")
-      end
-    end
+    local row = rows[which]
+    if row then row.sel:SetShown(which == selected) end
   end
+  if E.profBlock then E.profBlock:refresh() end
   if E.resetBtn then E.resetBtn:SetEnabled(selected ~= nil) end
   if E.copyBtn then
     E.copyBtn:SetEnabled(selected ~= nil)
@@ -366,10 +408,14 @@ local function relayout()
   editorChild:SetHeight(math.max(total + 4, 10))
 end
 
+local syncAuraPreview   -- defined with the Auras section (it needs auraSel)
+-- Both previews: the cast ring's fake cast while its section is open, and the
+-- selected aura group's sample icons while the Auras section is open.
 local function syncCastPreview()
   for _, u in ipairs(GU.UNITS) do
     GU:SetCastPreview(u, u == selected and E.castSec and E.castSec.open and container and container:IsVisible())
   end
+  if syncAuraPreview then syncAuraPreview() end
 end
 
 local function toggleSection(sc)
@@ -859,11 +905,18 @@ end
 
 -- --------------------------------------------------------------------------
 -- AURAS: any number of aura groups per unit — a list, then the selected
--- group's editor. Same bones as the Texts section. The Buffs / Debuffs kinds
--- put their FILTERS behind a cog; This spell puts its EFFECT's settings
--- behind one.
+-- group's editor. Same bones as the Texts section. A group's FILTERS sit
+-- behind a cog. (The "This spell" kind and its effect cog were removed
+-- 2026-09-20 — GloomsUnitFrames_Auras.lua, AURA_KINDS, says why.)
 -- --------------------------------------------------------------------------
 local auraSel = {}
+
+syncAuraPreview = function()
+  for _, u in ipairs(GU.UNITS) do
+    local on = u == selected and E.aurasSec and E.aurasSec.open and container and container:IsVisible()
+    GU:SetAuraPreview(u, on and (auraSel[selected] or 1) or nil)
+  end
+end
 
 local function AuraList() local cfg = Cfg(); return cfg and cfg.auras or nil end
 local function AuraCfg()
@@ -908,9 +961,6 @@ local function aurasSection(b, sc)
     addTip = { "Add an aura group", "A new row of icons at the centre of the frame. Move it with Offset X / Y below." },
     dupTip = "A copy of the selected group, one row lower.",
     describe = function(ac)
-      if ac.kind == "spell" then
-        return "This spell  ·  " .. (ac.spellName or ((ac.spellID or 0) > 0 and tostring(ac.spellID)) or "(none set)") .. "  ·  " .. tostring(ac.size or 28) .. "px"
-      end
       return (GU.AURA_KIND_LABEL[ac.kind] or ac.kind or "?") .. "  ·  up to " .. tostring(ac.max or 8) .. " at " .. tostring(ac.size or 28) .. "px"
     end,
     onSelect = selectGroup,
@@ -961,118 +1011,11 @@ local function aurasSection(b, sc)
         return opts
       end,
       function() local ac = AuraCfg(); return ac and ac.shape or "" end,
-      function(v) local ac = AuraCfg(); if ac then ac.shape = (v ~= "") and v or nil; if not ac.shape then ac.effect = nil end; GU:ApplyLayout(selected); R() end end,
-      "The suite's silhouettes — the same catalog Gloom's Bars and Gloom's Auras draw with. The cooldown swipe follows the shape. An effect needs a shape to trace.")
+      function(v) local ac = AuraCfg(); if ac then ac.shape = (v ~= "") and v or nil; GU:ApplyLayout(selected); R() end end,
+      "The suite's silhouettes — the same catalog Gloom's Bars and Gloom's Auras draw with. The cooldown swipe follows the shape.")
   end
 
-  -- ---- kind "spell": which spell, its silhouette and its effect --------
-  w.spellRow = g:row(62, function(f)
-    label(f, "Spell — its ID, or a name the game knows", PAD, -2)
-    w.spellBox = flatEditBox(f, 100, 22)
-    w.spellBox:ClearAllPoints(); w.spellBox:SetPoint("TOPLEFT", PAD, -20); w.spellBox:SetPoint("TOPRIGHT", -PAD, -20); w.spellBox:SetHeight(22)
-    w.spellBox:SetMaxLetters(80)
-    w.spellNote = newText(f, FONT.body, 10.5, MUTE, "LEFT"); w.spellNote:SetPoint("TOPLEFT", PAD, -44)
-    w.spellNote:SetPoint("TOPRIGHT", -PAD, -44); w.spellNote:SetJustifyH("LEFT"); w.spellNote:SetWordWrap(false)
-    local function commitSpell(self)
-      local ac = AuraCfg(); if not ac then return end
-      local id, name = GU:ResolveSpell(self:GetText())
-      if id then
-        if id ~= ac.spellID then ac.spellID, ac.spellName = id, name; GU:ApplyLayout(selected) end
-      else
-        ac.spellID, ac.spellName = 0, nil; GU:ApplyLayout(selected)
-      end
-      R()
-    end
-    w.spellBox:SetScript("OnEnterPressed", function(self) self:ClearFocus(); commitSpell(self) end)
-    w.spellBox:HookScript("OnEditFocusLost", commitSpell)
-    w.spellBox:SetScript("OnEscapePressed", function(self) self:ClearFocus(); R() end)
-  end)
   w.shape = shapeDropdown(g)
-
-  -- The effect's own settings, from its schema (CONTRACTS §8): one block per
-  -- module, built on first use inside the cog's popover; only the current
-  -- module's block is shown and the popover takes its height.
-  local pw = { blocks = {} }
-  local function pget(id, key)
-    return function()
-      local ac = AuraCfg(); if not ac then return nil end
-      local saved = ac.effectParams and ac.effectParams[id]
-      if saved and saved[key] ~= nil then return saved[key] end
-      local E = GloomsHub.Effects; local m = E and E:MergeParams(id, nil)
-      return m and m[key]
-    end
-  end
-  local function pset(id, key)
-    return function(v)
-      local ac = AuraCfg(); if not ac then return end
-      ac.effectParams = ac.effectParams or {}; ac.effectParams[id] = ac.effectParams[id] or {}
-      ac.effectParams[id][key] = v
-      GU:ApplyLayout(selected)
-    end
-  end
-  local function paramBlock(c, id)
-    if pw.blocks[id] then return pw.blocks[id] end
-    local E = GloomsHub.Effects; local mod = E and E:Get(id)
-    local blk = CreateFrame("Frame", nil, c); blk:SetPoint("TOPLEFT"); blk:SetPoint("TOPRIGHT"); blk:SetHeight(10)
-    local pg = UI.grid(blk, -6, { cols = 1 })
-    local rows = {}
-    for _, prm in ipairs(mod and mod.params or {}) do
-      local kind = prm.kind
-      if kind == "color" then
-        rows[#rows + 1] = cColor(pg, prm.label == "Colour" and "Color" or prm.label, pget(id, prm.key), pset(id, prm.key),
-          "Unit Frames › aura effect " .. prm.key)
-      elseif kind == "range" then
-        local dec = (prm.step or 1) < 1
-        pg:cell(H_SLIDER, function(f)
-          rows[#rows + 1] = sliderRow(f, -2, prm.label, prm.min, prm.max, prm.step or 1, pget(id, prm.key), pset(id, prm.key),
-            function(v) return dec and ("%.2f"):format(v) or tostring(math.floor(v + 0.5)) end)
-        end)
-      elseif kind == "bispeed" then
-        local neg, pos = prm.neg or "CCW", prm.pos or "CW"
-        local gt, st = pget(id, prm.key), pset(id, prm.key)
-        pg:cell(60, function(f)
-          rows[#rows + 1] = sliderRow(f, -2, prm.label, -100, 100, 5,
-            function() return math.floor((gt() or 0) * 100 + 0.5) end,
-            function(v) st(v / 100) end,
-            function(v) if v == 0 then return "still" end return (v < 0 and neg or pos) .. " " .. math.abs(math.floor(v + 0.5)) .. "%" end,
-            "direction and speed — left of centre is " .. neg .. ", right is " .. pos)
-        end)
-      elseif kind == "choice" then
-        local choices = {}
-        for _, ch in ipairs(prm.choices or {}) do choices[#choices + 1] = { ch[1], ch[2] or ch[1] } end
-        local cr = cChoice(pg, prm.label, choices, 64, function(v) pset(id, prm.key)(v) end)
-        rows[#rows + 1] = { refresh = function() cr:sync(pget(id, prm.key)()) end }
-      end
-    end
-    blk.rows = rows
-    blk.height = pg:layout() + 4
-    blk:SetHeight(blk.height)
-    pw.blocks[id] = blk
-    return blk
-  end
-  local function showParams(c)
-    local ac = AuraCfg(); local id = ac and ac.effect
-    for k, blk in pairs(pw.blocks) do blk:SetShown(k == id) end
-    if not id then return 10 end
-    local blk = paramBlock(c, id); blk:Show()
-    for _, r in ipairs(blk.rows) do if r.refresh then r:refresh() end end
-    return blk.height
-  end
-  w.effect = cDropdown(g, "Effect", 150,
-    function() local ac = AuraCfg(); local E = GloomsHub.Effects; local m = ac and ac.effect and E and E:Get(ac.effect)
-      return m and m.label or "None" end,
-    function()
-      local opts = { { label = "None", value = "" } }
-      local E = GloomsHub.Effects
-      if E then E:Each(function(mod) opts[#opts + 1] = { label = mod.label, value = mod.id } end) end
-      return opts
-    end,
-    function() local ac = AuraCfg(); return ac and ac.effect or "" end,
-    function(v) local ac = AuraCfg(); if ac then ac.effect = (v ~= "") and v or nil; GU:ApplyLayout(selected); R() end end,
-    "A Hub animation traced along the shape while this aura is up. Its own settings are behind the cog.",
-    { title = "Effect settings", w = 330,
-      build = function(c) return showParams(c) end,
-      onOpen = function(c) return showParams(c) end })
 
   -- ---- kinds "buffs" / "debuffs": the list layout + filters ------------
   w.max = cNum(g, "Max icons", 1, 40, aget("max", 8), aset("max"))
@@ -1141,8 +1084,10 @@ local function aurasSection(b, sc)
     local box = flatEditBox(parent, 100, 20)
     box:ClearAllPoints(); box:SetPoint("TOPLEFT", 4, y - 16); box:SetPoint("TOPRIGHT", -4, y - 16); box:SetHeight(20)
     box:SetMaxLetters(400)
+    local shown   -- what refresh last put in the box; an unchanged box is not re-parsed
     local function commit(self)
       local ac = AuraCfg(); if not ac then return end
+      if self:GetText() == shown then return end
       ac.filter = ac.filter or {}
       local ids, missed = {}, {}
       for part in (self:GetText() or ""):gmatch("[^,]+") do
@@ -1160,11 +1105,30 @@ local function aurasSection(b, sc)
     note:SetJustifyH("LEFT"); note:SetWordWrap(false)
     return { refresh = function()
       local ac = AuraCfg(); if not ac then return end
+      -- ⚠ On the PLAYER, the engine ignores spell-ID filters on DEBUFFS — include
+      -- and exclude both, measured 2026-09-20 (Void Breach stayed through each;
+      -- Hub FINDINGS §20). Buffs, and the target, filter fine. Say so instead of
+      -- taking a list that does nothing.
+      local dead = selected == "player" and ac.kind == "debuffs"
+      box:SetEnabled(not dead); box:SetAlpha(dead and 0.35 or 1)
+      if dead then
+        box:SetText("")
+        note:SetText("|cffff7729the game ignores spell-ID filters on your own debuffs|r — use the classes above")
+        return
+      end
       local ids = ac.filter and ac.filter[field] or {}
       if not box:HasFocus() then
+        -- "Name (ID)": the ID must survive a round trip. Shown by name alone, the
+        -- next focus-loss re-committed the NAME, which the game only resolves for
+        -- spells you know — a zone debuff's ID came back "not found" and the
+        -- filter was silently emptied (the owner, 2026-09-20, Void Breach).
         local names = {}
-        for _, id in ipairs(ids) do local info = C_Spell.GetSpellInfo(id); names[#names + 1] = info and info.name or tostring(id) end
-        box:SetText(table.concat(names, ", "))
+        for _, id in ipairs(ids) do
+          local info = C_Spell.GetSpellInfo(id)
+          names[#names + 1] = info and info.name and (info.name .. " (" .. id .. ")") or tostring(id)
+        end
+        shown = table.concat(names, ", ")
+        box:SetText(shown)
       end
       local missed = ac.filter and ac.filter[field .. "Missed"]
       note:SetText(missed and ("not found: " .. missed) or (#ids == 0 and "names or IDs, comma-separated" or (#ids .. " spell" .. (#ids == 1 and "" or "s"))))
@@ -1203,8 +1167,12 @@ local function aurasSection(b, sc)
   end
   local function showFilters(c)
     local ac = AuraCfg()
-    local pol = ac and ac.kind ~= "spell" and ((ac.kind == "buffs") and "buff" or "debuff") or nil
+    local pol = ac and ((ac.kind == "buffs") and "buff" or "debuff") or nil
     for k, blk in pairs(fw.blocks) do blk:SetShown(k == pol) end
+    -- Name the panel: the two differ (dispel types are debuff-only; defensives,
+    -- cancelable, stealable are buff-only) and it read as the filters "going missing".
+    local pf = w.filterCog and w.filterCog.popover and w.filterCog.popover.frame
+    if pf and pf.title then pf.title:SetText(pol == "buff" and "FILTERS — BUFFS" or "FILTERS — DEBUFFS") end
     if not pol then return 10 end
     local blk = filterBlock(c, pol); blk:Show()
     for _, r in ipairs(blk.rows) do if r.refresh then r:refresh() end end
@@ -1247,36 +1215,21 @@ local function aurasSection(b, sc)
     local ac = list[cur]
     ed:ClearAllPoints(); ed:SetPoint("TOPLEFT", 0, edY); ed:SetPoint("TOPRIGHT", 0, edY)
     ed:SetShown(ac ~= nil)
-    local isSpell = ac and ac.kind == "spell"
-    if ac then
-      g:show(w.spellRow, isSpell); w.shape:show(true)
-      w.effect:show(isSpell)
-      w.max:show(not isSpell); w.perLine:show(not isSpell); w.spacing:show(not isSpell)
-      w.order:show(not isSpell); g:show(w.growCell, not isSpell); g:show(w.filterCell, not isSpell)
-      w.border:show(not ac.shape)
-    end
+    if ac then w.border:show(not ac.shape) end
     local edH = ac and (g:layout() + 4) or 0
     ed:SetHeight(math.max(edH, 10))
     sc.height = -edY + edH + 8
     if not ac then return end
     w.enabled:refresh(); w.kind:refresh(); w.shape:refresh()
-    if isSpell then
-      if not w.spellBox:HasFocus() then w.spellBox:SetText(ac.spellName or ((ac.spellID or 0) > 0 and tostring(ac.spellID)) or "") end
-      if (ac.spellID or 0) > 0 then w.spellNote:SetText(("ID %d — %s. Shows while this aura is on the %s."):format(ac.spellID, ac.spellName or "?", selected == "target" and "target" or "you"))
-      else w.spellNote:SetText("No spell set. Type an ID (from Wowhead) or the name of one of your own spells, then Enter.") end
-      w.effect:refresh()
-      cogEnabled(w.effect.cog, ac.effect ~= nil and ac.shape ~= nil)
-      if w.effect.cog.popover:isOpen() then w.effect.cog.popover:open() end
-    else
-      w.max:refresh(); w.spacing:refresh(); w.perLine:refresh(); w.order:refresh()
-      w.growH.sync(ac.growH or "RIGHT"); w.growV.sync(ac.growV or "UP")
-      w.filterSum:SetText(FilterSummary(ac))
-      if w.filterCog.popover:isOpen() then w.filterCog.popover:open() end
-    end
+    w.max:refresh(); w.spacing:refresh(); w.perLine:refresh(); w.order:refresh()
+    w.growH.sync(ac.growH or "RIGHT"); w.growV.sync(ac.growV or "UP")
+    w.filterSum:SetText(FilterSummary(ac))
+    if w.filterCog.popover:isOpen() then w.filterCog.popover:open() end
     w.size:refresh(); w.level:refresh(); w.x:refresh(); w.y:refresh()
     w.durOn:refresh(); w.durSize:refresh(); w.durSize:setEnabled(ac.showDuration ~= false)
     w.stackOn:refresh(); w.stackSize:refresh(); w.stackSize:setEnabled(ac.showStacks ~= false)
     w.swipe:refresh(); w.border:refresh()
+    syncAuraPreview()   -- the sample icons follow the selected group
   end
 end
 
@@ -1431,6 +1384,10 @@ local function BuildTab(c)
   end)
 
   GU:OnChange(function(what, which)
+    if what == "profile" then
+      if c:IsVisible() then RefreshEditor(); RefreshList() end
+      return
+    end
     if which ~= selected then return end
     if what == "position" and E.xRow then E.xRow:refresh(); E.yRow:refresh() end
   end)

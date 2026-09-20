@@ -48,20 +48,20 @@ GU.AURA_DEFAULTS = {
     swipe     = true,         -- the engine's cooldown swipe over the icon
     border    = true,         -- 1px dark edge
     level     = 60,           -- frame level above the unit frame (rings 1–64)
-    -- kind "spell" only: ONE aura by spell ID (buff or debuff, whichever it
-    -- is), wearing a Hub silhouette and running a Hub effect while present.
-    spellID   = 0,
-    shape     = nil,          -- a GloomsHub.SHAPES key
-    effect    = nil,          -- a GloomsHub.Effects module id
-    effectParams = nil,       -- { [moduleId] = { key = value } }, laid over the module defaults
+    shape     = nil,          -- a GloomsHub.SHAPES key, worn by every icon in the group
 }
 
--- Three kinds. Buffs / Debuffs are engine GROUPS narrowed by `filter`; This
--- spell is a pair of SLOTS filtered to one spell ID.
+-- Two kinds: Buffs / Debuffs are engine GROUPS narrowed by `filter`.
+-- ⚠ There was a third, "This spell" — ONE aura by spell ID wearing a Hub effect —
+-- REMOVED by the owner 2026-09-20: on the player, the engine ignores a spell-ID
+-- filter on HARMFUL auras (measured through a slot and a group, in either order:
+-- a group filtered to one ID showed Void Breach, then Blood Draw), and a
+-- highlight that cannot single out a DEBUFF is "effectively useless" (his words).
+-- Hub FINDINGS §20 holds the evidence. The Hub-effect-under-a-button machinery
+-- went with it; a saved group of that kind is dropped at load (EnsureAuras).
 GU.AURA_KINDS = {
     { "buffs",   "Buffs",      "HELPFUL" },
     { "debuffs", "Debuffs",    "HARMFUL" },
-    { "spell",   "This spell", nil },
 }
 local BASE, KIND_LABEL = {}, {}
 for _, k in ipairs(GU.AURA_KINDS) do BASE[k[1]] = k[3]; KIND_LABEL[k[1]] = k[2] end
@@ -226,14 +226,12 @@ end
 -- initializeFrame: one button, wired once. `ac` is the group config at
 -- creation time — anything read from it here is baked into this container.
 ------------------------------------------------------------------------
--- Shape + effect on a button's OWN regions, wired ONCE, here, with no
--- trigger: nothing under an aura button ever tells us it appeared (measured
--- 2026-09-19 — no OnShow, no OnUpdate on a child frame; IsShown/IsVisible
--- answer with a SECRET boolean). So the effect is simply started now and lives
--- under the button, which the engine hides and shows. The Hub's Effects
--- modules verify their mask bind and retry until the texture has drawn
--- (Effects.lua, "Hosts under a Blizzard AuraButton"); the icon's shape mask
--- below does the same.
+-- The shape on a button's OWN regions, wired ONCE, here, with no trigger:
+-- nothing under an aura button ever tells us it appeared (measured 2026-09-19
+-- — no OnShow, no OnUpdate on a child frame; IsShown/IsVisible answer with a
+-- SECRET boolean). The mask bind is verified and retried until the texture
+-- has drawn. (A Hub EFFECT used to be started here too, for the This-spell
+-- kind; that kind is gone — see AURA_KINDS.)
 local issecretvalue = _G.issecretvalue
 local function BindMask(tex, mask)
     tex:AddMaskTexture(mask)
@@ -252,79 +250,29 @@ local function Decorate(button, icon, cd, host, ac, size, live)
         local mask = button:CreateMaskTexture()
         mask:SetTexture(path, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
         hub:GrowAnchor(mask, host, 0)
+        -- In a fight the icon is a forbidden object and AddMaskTexture THROWS (20×
+        -- on the DK's first pull, 2026-09-20 — buttons wired mid-combat by a buff
+        -- appearing); so wait for regen, and never let the bind error escape.
         local function attempt()
             if not live.on then return end
-            if not BindMask(icon, mask) then C_Timer.After(0.5, attempt) end
+            if InCombatLockdown() then C_Timer.After(1, attempt); return end
+            local ok, bound = pcall(BindMask, icon, mask)
+            if not (ok and bound) then C_Timer.After(0.5, attempt) end
         end
         C_Timer.After(0, attempt)
         local swipe = cd and hub:ShapeAsset(key, "swipe")
         if swipe and cd.SetSwipeTexture then cd:SetSwipeTexture(swipe) end
     end
-    -- A Hub effect is the THIS SPELL highlight only. A list group can carry a
-    -- stale `effect` (its kind was changed after one was picked) and every one
-    -- of its buttons would run it — measured 2026-09-20 as a Breathe storm on
-    -- a Buffs group whose effect the tab no longer even shows.
-    local E = hub and hub.Effects
-    local id = ac.kind == "spell" and ac.effect or nil
-    if key and id and E and E.Get and E:Get(id) then
-        local merged = GU:EffectParams(ac)
-        local mod = E:Get(id)
-        if merged then
-            GU.fxStarts = (GU.fxStarts or 0) + 1
-            local ok, err = pcall(mod.Start, mod, host, host, key, merged)
-            if not ok then GU.fxError = err end
-            live.hosts[#live.hosts + 1] = { mod = mod, host = host, key = key }
-        end
-    end
 end
 
--- The effect's parameters for a group: module defaults with the saved ones over.
-function GU:EffectParams(ac)
-    local E = _G.GloomsHub and _G.GloomsHub.Effects
-    if not (E and ac.effect) then return nil end
-    return E:MergeParams(ac.effect, ac.effectParams and ac.effectParams[ac.effect])
-end
-local function ParamsSig(ac)
-    local p = GU:EffectParams(ac)
-    if not p then return "-" end
-    local keys = {}
-    for k in pairs(p) do keys[#keys + 1] = k end
-    table.sort(keys)
-    local parts = {}
-    for _, k in ipairs(keys) do
-        local v = p[k]
-        parts[#parts + 1] = k .. "=" .. (type(v) == "table" and (tostring(v[1]) .. "," .. tostring(v[2]) .. "," .. tostring(v[3])) or tostring(v))
-    end
-    return table.concat(parts, "|")
-end
-
--- Re-tune a running effect in place (Start is idempotent) when only its
--- parameters changed — no container rebuild, no icon blink. Guarded by a
--- signature: a re-Start re-primes and reveals a frame later, so a storm of
--- them makes the effect flicker (CONTRACTS §8).
-local function RestyleEffects(g, ac)
-    local sig = ParamsSig(ac)
-    if g.live.paramsSig == sig then return end
-    g.live.paramsSig = sig
-    local merged = GU:EffectParams(ac)
-    if not merged then return end
-    for _, e in ipairs(g.live.hosts) do pcall(e.mod.Start, e.mod, e.host, e.host, e.key, merged) end
-end
-
--- `slot` (kind "spell"): the engine does not lay slot buttons out, so the
--- button is glued to a frame WE position (moving it later needs no button call).
-local function MakeInitializer(ac, slotAnchor, live)
+local function MakeInitializer(ac, live)
     local w, h = IconRect(ac)
     local size = math.max(w, h)
     return function(button)
         -- 1 · size: the flow layout only anchors; an unsized button draws nothing
         button:SetSize(w, h)
-        if slotAnchor then
-            button:ClearAllPoints(); button:SetAllPoints(slotAnchor)
-            button:SetFrameLevel(slotAnchor:GetFrameLevel() + 1)
-        end
-        -- an explicitly sized frame of our own for the shape mask and the
-        -- effect to size against; it hides and shows with the button
+        -- an explicitly sized frame of our own for the shape mask to size
+        -- against; it hides and shows with the button
         local host = CreateFrame("Frame", nil, button)
         host:SetSize(w, h); host:SetPoint("CENTER", button, "CENTER")
         host:EnableMouse(false)
@@ -385,21 +333,17 @@ end
 ------------------------------------------------------------------------
 -- What must match for a live container to be kept; anything else → rebuild.
 local function Signature(ac)
-    local fstr, cand
-    if ac.kind ~= "spell" then fstr, cand = GU:AuraFilter(ac) end
-    return table.concat({ ac.kind == "spell" and ("spell" .. tostring(ac.spellID)) or (fstr .. "#" .. CandSig(cand)),
+    local fstr, cand = GU:AuraFilter(ac)
+    return table.concat({ fstr .. "#" .. CandSig(cand),
         tostring(ac.sort), ac.size or 28, ac.showDuration ~= false and 1 or 0,
         ac.durationSize or 11, ac.showStacks ~= false and 1 or 0, ac.stackSize or 11,
         ac.swipe ~= false and 1 or 0, ac.border ~= false and 1 or 0,
-        tostring(ac.shape), tostring(ac.effect) }, ":")   -- effect PARAMS restyle live, see RestyleEffects
+        tostring(ac.shape) }, ":")
 end
 
 local function Retire(g)
     if not g then return end
-    if g.live then
-        g.live.on = false
-        for _, e in ipairs(g.live.hosts) do pcall(e.mod.Stop, e.mod, e.host) end
-    end
+    if g.live then g.live.on = false end
     if g.container then
         pcall(g.container.SetUnit, g.container, nil)
         g.container:Hide()
@@ -412,13 +356,6 @@ local function LayoutLive(g, ac, f)
     holder:SetFrameLevel(f:GetFrameLevel() + (ac.level or 60))
     holder:SetShown(ac.enabled ~= false)
     local anchor = AnchorFor(ac.growH, ac.growV)
-    if g.slotAnchor then
-        -- kind "spell": the icon's centre sits at the offset
-        g.slotAnchor:SetSize(IconRect(ac))
-        g.slotAnchor:ClearAllPoints(); g.slotAnchor:SetPoint("CENTER", f, "CENTER", ac.x or 0, ac.y or 0)
-        c:ClearAllPoints(); c:SetPoint("CENTER", g.slotAnchor, "CENTER")
-        return
-    end
     c:ClearAllPoints()
     c:SetPoint(anchor, f, "CENTER", ac.x or 0, ac.y or 0)
     if c.SetFlowLayoutAnchorPoint then c:SetFlowLayoutAnchorPoint(anchor) end
@@ -441,8 +378,8 @@ local function Build(f, unit, ac)
     if not Available() then return nil end
     local holder = CreateFrame("Frame", nil, f)
     holder:SetAllPoints(f)
-    -- what this container's buttons are running, so Retire can stop it
-    local live = { on = true, hosts = {} }
+    -- `on` lets a retired container's pending mask binds stop
+    local live = { on = true }
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, holder, "CustomAuraContainerTemplate")
     if not (ok and c) then
         GU.aurasFailed = (GU.aurasFailed or 0) + 1
@@ -451,31 +388,18 @@ local function Build(f, unit, ac)
     end
     c:SetSize(1, 1)
     local g = { holder = holder, container = c, sig = Signature(ac), live = live }
-    if ac.kind == "spell" then
-        g.slotAnchor = CreateFrame("Frame", nil, holder)
-        g.slotAnchor:SetFrameLevel(holder:GetFrameLevel())
-        LayoutLive(g, ac, f)
-        -- one slot per polarity: a spell is a buff or a debuff, and asking
-        -- the user which is a question the engine can answer for us
-        local ids = { [tonumber(ac.spellID) or 0] = true }
-        for _, pol in ipairs({ "HELPFUL", "HARMFUL" }) do
-            c:AddAuraSlot(pol, pol, { candidateFilters = { includeSpellIDs = ids },
-                                       initializeFrame = MakeInitializer(ac, g.slotAnchor, live) })
-        end
-    else
-        LayoutLive(g, ac, f)
-        local iw, ih = IconRect(ac)
-        local fstr, cand = GU:AuraFilter(ac)
-        local sortMethod, sortDirection = SortOpts(ac)
-        c:AddAuraGroup("main", fstr, {
-            maxFrameCount = ac.max or 8,
-            candidateFilters = cand,
-            sortMethod = sortMethod, sortDirection = sortDirection,
-            initializeFrame = MakeInitializer(ac, nil, live),
-            layout = { elementWidth = iw, elementHeight = ih,
-                       elementSpacing = ac.spacing or 3, lineSpacing = ac.spacing or 3 },
-        })
-    end
+    LayoutLive(g, ac, f)
+    local iw, ih = IconRect(ac)
+    local fstr, cand = GU:AuraFilter(ac)
+    local sortMethod, sortDirection = SortOpts(ac)
+    c:AddAuraGroup("main", fstr, {
+        maxFrameCount = ac.max or 8,
+        candidateFilters = cand,
+        sortMethod = sortMethod, sortDirection = sortDirection,
+        initializeFrame = MakeInitializer(ac, live),
+        layout = { elementWidth = iw, elementHeight = ih,
+                   elementSpacing = ac.spacing or 3, lineSpacing = ac.spacing or 3 },
+    })
     -- unit LAST: event registration is evaluated on SetUnit and needs the group in place
     c:SetUnit(unit)
     c:UpdateAllAuras()
@@ -483,8 +407,116 @@ local function Build(f, unit, ac)
     return g
 end
 
+------------------------------------------------------------------------
+-- The PREVIEW (the owner, 2026-09-20): sample icons drawn where a group's
+-- buttons will be, so it can be placed and sized before any aura is up —
+-- the engine only ever draws buttons for auras you actually have. Our own
+-- textures, laid out by the same rules the engine's flow layout is given
+-- (icon rect, spacing, wrap, growth direction, anchor corner), with the
+-- group's shape. Shown for the SELECTED group while the tab's Auras section
+-- is open, like the cast ring's fake cast. Icons come from your own spellbook.
+------------------------------------------------------------------------
+local auraPreview = {}   -- [unit] = index of the previewed group, or nil
+
+local sampleIcons
+local function SampleIcons()
+    if sampleIcons then return sampleIcons end
+    sampleIcons = {}
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+    local n = C_SpellBook and C_SpellBook.GetNumSpellBookSkillLines and C_SpellBook.GetNumSpellBookSkillLines() or 0
+    for line = 1, n do
+        local info = C_SpellBook.GetSpellBookSkillLineInfo(line)
+        if info and info.itemIndexOffset and info.numSpellBookItems then
+            for i = info.itemIndexOffset + 1, info.itemIndexOffset + info.numSpellBookItems do
+                local ok, item = pcall(C_SpellBook.GetSpellBookItemInfo, i, bank)
+                if ok and item and item.iconID and not item.isPassive and item.iconID ~= 134400 then
+                    sampleIcons[#sampleIcons + 1] = item.iconID
+                end
+                if #sampleIcons >= 40 then break end
+            end
+        end
+        if #sampleIcons >= 40 then break end
+    end
+    if #sampleIcons == 0 then sampleIcons[1] = 134400 end
+    return sampleIcons
+end
+
+local function LayoutAuraPreview(f, cfg, unit)
+    local idx = auraPreview[unit]
+    local ac = idx and cfg.auras and cfg.auras[idx]
+    local pv = f.auraPreview
+    if not ac then if pv then pv:Hide() end return end
+    if not pv then
+        pv = CreateFrame("Frame", nil, f)
+        pv.icons = {}
+        f.auraPreview = pv
+    end
+    pv:SetFrameLevel(f:GetFrameLevel() + (ac.level or 60) + 1)
+    local iw, ih = IconRect(ac)
+    local gap = ac.spacing or 3
+    local perLine = math.max(1, ac.perLine or 8)
+    local count = math.max(1, math.min(ac.max or 8, 40))
+    local anchor = AnchorFor(ac.growH, ac.growV)
+    local sx = (ac.growH == "LEFT") and -1 or 1
+    local sy = (ac.growV == "DOWN") and -1 or 1
+    pv:ClearAllPoints()
+    pv:SetPoint(anchor, f, "CENTER", ac.x or 0, ac.y or 0)
+    pv:SetSize(1, 1)
+    local hub = _G.GloomsHub
+    local maskPath = ac.shape and hub and hub.ShapeAsset and hub:ShapeAsset(ac.shape, "base")
+    local icons = SampleIcons()
+    for k = 1, math.max(count, #pv.icons) do
+        local slot = pv.icons[k]
+        if k <= count then
+            if not slot then
+                slot = CreateFrame("Frame", nil, pv)
+                slot.tex = slot:CreateTexture(nil, "ARTWORK")
+                slot.tex:SetAllPoints(slot)
+                slot.edge = slot:CreateTexture(nil, "BACKGROUND")
+                slot.edge:SetColorTexture(0, 0, 0, 0.9)
+                slot.mask = slot:CreateMaskTexture()
+                pv.icons[k] = slot
+            end
+            local col, row = (k - 1) % perLine, math.floor((k - 1) / perLine)
+            slot:SetSize(iw, ih)
+            slot:ClearAllPoints()
+            slot:SetPoint(anchor, pv, anchor, sx * col * (iw + gap), sy * row * (ih + gap))
+            slot.tex:SetTexture(icons[((k - 1) % #icons) + 1])
+            slot.tex:SetTexCoord(CropCoords(iw, ih))
+            slot.tex:SetAlpha(0.9)
+            slot.tex:RemoveMaskTexture(slot.mask)
+            if maskPath then
+                slot.mask:SetTexture(maskPath, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+                hub:GrowAnchor(slot.mask, slot, 0)
+                slot.tex:AddMaskTexture(slot.mask)
+                slot.edge:Hide()
+            elseif ac.border ~= false then
+                -- a square icon's 1px dark edge, as the live one draws it
+                slot.edge:ClearAllPoints()
+                slot.edge:SetPoint("TOPLEFT", -1, 1); slot.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+                slot.edge:Show()
+            else
+                slot.edge:Hide()
+            end
+            slot:Show()
+        elseif slot then
+            slot:Hide()
+        end
+    end
+    pv:SetShown(ac.enabled ~= false)
+end
+
+-- The tab: preview group `index` of `unit` (nil = off). Re-laid on every ApplyLayout.
+function GU:SetAuraPreview(unit, index)
+    auraPreview[unit] = index
+    local f = self.Frame and self:Frame(unit)
+    local cfg = self:Config(unit)
+    if f and cfg then LayoutAuraPreview(f, cfg, unit) end
+end
+
 -- Called by the engine from ApplyLayout.
 function GU:LayoutAuras(f, cfg, unit)
+    LayoutAuraPreview(f, cfg, unit)
     f.auras = f.auras or {}
     local list = cfg.auras or {}
     for i, ac in ipairs(list) do
@@ -493,10 +525,8 @@ function GU:LayoutAuras(f, cfg, unit)
         if not g then
             g = Build(f, unit, ac)
             f.auras[i] = g or false
-            if g then g.live.paramsSig = ParamsSig(ac) end
         else
             LayoutLive(g, ac, f)
-            RestyleEffects(g, ac)
         end
     end
     for i = #list + 1, #f.auras do
@@ -519,7 +549,15 @@ end
 function GU:ResolveSpell(text)
     text = (text or ""):match("^%s*(.-)%s*$")
     if text == "" then return nil end
+    -- "Name (ID)" — the tab's own rendering of a stored entry — resolves by the ID.
+    local tail = text:match("%((%d+)%)%s*$")
+    if tail then text = tail end
     local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(tonumber(text) or text)
     if info and info.spellID then return info.spellID, info.name, info.iconID end
+    -- A bare number is accepted as-is: an aura's ID (a zone debuff, a boss
+    -- mechanic) often has no spell record the client will hand back, and it is
+    -- still exactly the key the engine filters on (the owner, 2026-09-20).
+    local n = tonumber(text)
+    if n and n > 0 and n == math.floor(n) then return n, nil, nil end
     return nil
 end

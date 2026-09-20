@@ -173,8 +173,17 @@ local function UnitDefaults(x, y)
     }
 end
 
+-- A PROFILE is the whole tool's config: both units. GloomsUnitFramesDB holds a
+-- library of them, shared account-wide, and a per-character binding to one
+-- (GB's shape; the owner, 2026-09-20: "a profile-based system, like it is for
+-- literally every other module in this suite"):
+--   GloomsUnitFramesDB = { _version = 2,
+--                          profiles     = { [name] = { player = {…}, target = {…} } },
+--                          charProfiles = { ["Name-Realm"] = name } }
+-- The engine's `db` below is the ACTIVE profile's table, so every db[which]
+-- read is unchanged; switching swaps `db` and re-applies both units.
+local DB_VERSION = 2
 local DEFAULTS = {
-    _version = 1,
     player = UnitDefaults(-300, -150),
     target = UnitDefaults( 300, -150),
 }
@@ -194,12 +203,17 @@ local CLASS_RESOURCE = {
     MONK        = { type = Enum.PowerType.Chi,           token = "CHI" },
     MAGE        = { type = Enum.PowerType.ArcaneCharges, token = "ARCANE_CHARGES" },
     EVOKER      = { type = Enum.PowerType.Essence,       token = "ESSENCE" },
+    -- Runes ARE a power type: UnitPower counts the READY runes (max 6), so the
+    -- segments fill by count like every other resource — a recharging rune is
+    -- simply "not ready yet". Added 2026-09-20 for the owner's partner's DK.
+    DEATHKNIGHT = { type = Enum.PowerType.Runes,         token = "RUNES" },
 }
 
 ------------------------------------------------------------------------
 -- State
 ------------------------------------------------------------------------
-local db          = nil
+local root        = nil   -- GloomsUnitFramesDB
+local db          = nil   -- the ACTIVE profile: { player = cfg, target = cfg }
 local initialised = false
 local frames      = {}   -- per unit: the ring frame
 local anchors     = {}   -- per unit: the draggable anchor (tab open only)
@@ -246,6 +260,12 @@ end
 local function EnsureAuras(cfg, which)
     if cfg.auras == nil then
         cfg.auras = { { kind = (which == "target") and "mydebuffs" or "buffs", x = -110, y = 118 } }
+    end
+    -- The "This spell" kind was removed 2026-09-20 (GloomsUnitFrames_Auras.lua,
+    -- AURA_KINDS); a saved group of that kind is dropped rather than migrated —
+    -- nothing else can do what it claimed to.
+    for i = #cfg.auras, 1, -1 do
+        if cfg.auras[i].kind == "spell" then table.remove(cfg.auras, i) end
     end
     for _, ac in ipairs(cfg.auras) do ApplyDefaults(ac, GU.AURA_DEFAULTS); GU:MigrateAuraGroup(ac) end
 end
@@ -1086,7 +1106,12 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
     local seg = n and math.max(1, (span - (n - 1) * gap) / n) or 0
     local sgn = rc.clockwise and -1 or 1
     local color = rc.color
-    if rc.resourceColor and token and PowerBarColor[token] then
+    if rc.resourceColor and token == "RUNES" then
+        -- Blizzard's RUNES entry is the grey of a generic rune; a DK's resource
+        -- colour is the class red (the owner, 2026-09-20).
+        local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS.DEATHKNIGHT
+        if c then color = { c.r, c.g, c.b } end
+    elseif rc.resourceColor and token and PowerBarColor[token] then
         local c = PowerBarColor[token]; color = { c.r, c.g, c.b }
     end
     -- The breakpoint: at `breakAt` points or more every segment turns
@@ -1184,9 +1209,26 @@ function GU:Refresh(which)
     -- Resource ring: every live segment reads the same percent through its own window.
     rc, r = cfg.rings.resource, f.rings.resource
     if rc and r and rc.enabled and r.pType then
+        -- Runes: UnitPowerPercent does not take them (the ring stayed empty on the
+        -- DK, 2026-09-20), so count the READY runes through GetRuneCooldown and feed
+        -- the plain fraction — each segment's window fills in turn. A secret answer
+        -- falls back to the percent route rather than guessing.
+        local plain
+        if Enum.PowerType.Runes and r.pType == Enum.PowerType.Runes and GetRuneCooldown then
+            local ready, total = 0, 0
+            for i = 1, 6 do
+                local ok, _, _, runeReady = pcall(GetRuneCooldown, i)
+                if not ok or (issecretvalue and issecretvalue(runeReady)) then ready = nil; break end
+                if runeReady ~= nil then total = total + 1; if runeReady then ready = ready + 1 end end
+            end
+            if ready and total > 0 then plain = ready / total end
+        end
         for i = 1, r.n do
-            local ok = pcall(r.segs[i].fill.SetFromUnit, r.segs[i].fill, unit, r.pType)
-            if not ok then r.segs[i].fill:SetFromPlain(0) end
+            if plain then r.segs[i].fill:SetFromPlain(plain)
+            else
+                local ok = pcall(r.segs[i].fill.SetFromUnit, r.segs[i].fill, unit, r.pType)
+                if not ok then r.segs[i].fill:SetFromPlain(0) end
+            end
         end
     end
 
@@ -1479,6 +1521,7 @@ end
 -- API for the tab
 ------------------------------------------------------------------------
 function GU:Config(which) return db and db[which] or nil end
+function GU:Frame(which) return frames[which] end
 function GU:Defaults(which) return DEFAULTS[which] end
 function GU:IsReady() return initialised end
 
@@ -1522,6 +1565,118 @@ function GU:Reset(which)
     self:ApplyLayout(which)
 end
 
+------------------------------------------------------------------------
+-- Profiles (the data model is described above DEFAULTS).
+------------------------------------------------------------------------
+function GU:CharKey()
+    local name, realm = UnitName("player"), GetRealmName()
+    return (name or "?") .. "-" .. (realm or "?")
+end
+
+local function SortedNames(t)
+    local o = {}
+    for name in pairs(t or {}) do o[#o + 1] = name end
+    table.sort(o)
+    return o
+end
+function GU:ProfileNames() return SortedNames(root and root.profiles) end
+-- The characters bound to a profile (their keys), for the delete gate.
+function GU:ProfileUsers(name)
+    local o = {}
+    for char, p in pairs((root and root.charProfiles) or {}) do if p == name then o[#o + 1] = char end end
+    return o
+end
+
+-- Fill a profile out to the current shape: defaults, then the field
+-- migrations, then the two seeded lists. Every profile passes through here
+-- before it is drawn, whether migrated, created, copied or switched to.
+local function PrepareProfile(prof)
+    ApplyDefaults(prof, DEFAULTS)
+    for _, which in ipairs(GU.UNITS) do
+        for _, key in ipairs(GU.RINGS) do
+            local rc = prof[which].rings[key]
+            if rc then
+                -- Same-day migration (2026-09-19): "shift" was briefly a colour MODE; it is a toggle now.
+                if rc.colorMode == "shift" then rc.colorMode, rc.shift = "solid", true end
+                if rc.texture == "ring" then rc.texture = "disc" end
+            end
+        end
+        EnsureTexts(prof[which]); EnsureAuras(prof[which], which)
+    end
+    return prof
+end
+
+-- The profile this character is bound to. An unbound character lands on
+-- "Default" — the migrated account-wide config, so nothing the owner built
+-- is lost on any character — else on the first name; login writes the binding.
+function GU:ActiveProfileName()
+    if not (root and root.profiles) then return nil end
+    local name = root.charProfiles and root.charProfiles[GU:CharKey()]
+    if name and root.profiles[name] then return name end
+    if root.profiles.Default then return "Default" end
+    return SortedNames(root.profiles)[1]
+end
+
+-- Point the engine at a profile and redraw both units. The frames already
+-- exist; ApplyLayout re-reads db[which] for rings, texts, aura groups and
+-- the cast holder's config, so nothing else caches the old table.
+local function LoadProfile(name)
+    db = PrepareProfile(root.profiles[name])
+    if initialised then
+        for _, which in ipairs(GU.UNITS) do GU:ApplyLayout(which) end
+        GU:Notify("profile")
+    end
+end
+
+function GU:SetActiveProfile(name)
+    if not (root and root.profiles[name]) then return false end
+    root.charProfiles = root.charProfiles or {}
+    root.charProfiles[self:CharKey()] = name
+    LoadProfile(name)
+    return true
+end
+
+-- New = the factory look (Copy is how you start from THIS look).
+function GU:CreateProfile(name)
+    if not root or root.profiles[name] then return false end
+    root.profiles[name] = PrepareProfile({})
+    return true
+end
+
+function GU:CopyProfile(src, new)
+    if not (root and root.profiles[src]) or root.profiles[new] then return false end
+    root.profiles[new] = DeepCopy(root.profiles[src])
+    return true
+end
+
+function GU:RenameProfile(old, new)
+    if not (root and root.profiles[old]) then return false end
+    if old == new then return true end   -- the dialog prefills the name; OK-without-typing is not a collision
+    if root.profiles[new] then return false end
+    root.profiles[new] = root.profiles[old]
+    root.profiles[old] = nil
+    for char, p in pairs(root.charProfiles or {}) do
+        if p == old then root.charProfiles[char] = new end
+    end
+    return true
+end
+
+-- Never deletes the last profile. Every character bound to the deleted one
+-- moves to the fallback, returned so the caller can SAY where this character
+-- landed rather than moving it silently.
+function GU:DeleteProfile(name)
+    if not (root and root.profiles[name]) then return false end
+    if #SortedNames(root.profiles) <= 1 then return false end
+    local wasActive = (self:ActiveProfileName() == name)
+    root.profiles[name] = nil
+    local fallback = root.profiles.Default and "Default" or SortedNames(root.profiles)[1]
+    for char, p in pairs(root.charProfiles or {}) do
+        if p == name then root.charProfiles[char] = fallback end
+    end
+    if wasActive then LoadProfile(fallback) end
+    return true, fallback
+end
+
 -- While the tab edits a unit its anchor is draggable and its outline shows.
 function GU:SetEditing(which)
     editing = which
@@ -1550,6 +1705,7 @@ ev:RegisterUnitEvent("UNIT_MAXHEALTH", "player", "target")
 ev:RegisterUnitEvent("UNIT_POWER_UPDATE", "player", "target")
 ev:RegisterUnitEvent("UNIT_MAXPOWER", "player", "target")
 ev:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player", "target")
+ev:RegisterEvent("RUNE_POWER_UPDATE")   -- a DK's rune readiness (no unit arg; player only)
 ev:RegisterUnitEvent("UNIT_FACTION", "player", "target")   -- reaction / tap changes
 -- events that move only the text pieces
 for _, e in ipairs({ "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_CLASSIFICATION_CHANGED", "UNIT_ABSORB_AMOUNT_CHANGED",
@@ -1573,22 +1729,26 @@ end
 ev:SetScript("OnEvent", function(_, event, unit)
     if event == "PLAYER_LOGIN" then
         GloomsUnitFramesDB = GloomsUnitFramesDB or {}
-        db = GloomsUnitFramesDB
-        if db._version ~= DEFAULTS._version then
-            for k in pairs(db) do db[k] = nil end
+        root = GloomsUnitFramesDB
+        if root._version == 1 or (root._version == nil and root.player) then
+            -- v1 was ONE account-wide config { player, target }. It becomes the
+            -- first profile, "Default", and every character keeps landing on it
+            -- until the owner makes another — nothing he built is lost.
+            local prof = { player = root.player, target = root.target }
+            for k in pairs(root) do root[k] = nil end
+            root.profiles = { Default = prof }
+        elseif root._version ~= nil and root._version ~= DB_VERSION then
+            for k in pairs(root) do root[k] = nil end
         end
-        ApplyDefaults(db, DEFAULTS)
-        -- Same-day migration: "shift" was briefly a colour MODE; it is a toggle now.
-        for _, which in ipairs(GU.UNITS) do
-            for _, key in ipairs(GU.RINGS) do
-                local rc = db[which].rings[key]
-                if rc then
-                    if rc.colorMode == "shift" then rc.colorMode, rc.shift = "solid", true end
-                    if rc.texture == "ring" then rc.texture = "disc" end
-                end
-            end
-        end
-        for _, which in ipairs(GU.UNITS) do EnsureTexts(db[which]); EnsureAuras(db[which], which); CreateUnitFrame(which) end
+        root._version = DB_VERSION
+        root.profiles = root.profiles or {}
+        root.charProfiles = root.charProfiles or {}
+        if next(root.profiles) == nil then root.profiles.Default = {} end
+        -- Bind this character (CharKey needs the realm, hence LOGIN) and load.
+        local name = GU:ActiveProfileName()
+        root.charProfiles[GU:CharKey()] = name
+        LoadProfile(name)
+        for _, which in ipairs(GU.UNITS) do CreateUnitFrame(which) end
         initialised = true
         RefreshKick()
         for _, which in ipairs(GU.UNITS) do GU:ApplyLayout(which) end
@@ -1598,6 +1758,8 @@ ev:SetScript("OnEvent", function(_, event, unit)
         if event == "PLAYER_TARGET_CHANGED" then GU:RefreshAuras(frames.target) end
     elseif event == "SPELLS_CHANGED" or (event == "UNIT_PET" and unit == "player") then
         RefreshKick()
+    elseif event == "RUNE_POWER_UPDATE" then
+        if initialised and frames.player:IsShown() then GU:Refresh("player") end
     elseif event == "UNIT_MAXPOWER" and unit == "player" or event == "PLAYER_SPECIALIZATION_CHANGED"
         or event == "UPDATE_SHAPESHIFT_FORM" then
         RefreshKick()
@@ -1767,8 +1929,6 @@ SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
     if msg == "auras" then
         Chat(("auras: blizzard container addon loaded=%s  createFailed=%s  layoutError=%s  decorateError=%s"):format(
             tostring(C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer")), tostring(GU.aurasFailed or 0), tostring(GU.aurasError), tostring(GU.decorateError)))
-        Chat(("effects: host OnShow fired %d time(s), Start called %d time(s), last error=%s"):format(
-            GU.hostShows or 0, GU.fxStarts or 0, tostring(GU.fxError)))
         for _, which in ipairs(GU.UNITS) do
             local f = frames[which]
             local cfgN, liveN = #(db[which].auras or {}), 0

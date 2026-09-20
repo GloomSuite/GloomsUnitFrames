@@ -26,7 +26,7 @@ class-resource and cast displays as ARCS of any span, each placeable, sizeable, 
 colourable. Target: **Midnight 12.1** (Interface `120100`), retail only. Built 2026-09-19 in one
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
-The remaining milestones are Hub BACKLOG items 12–15 — **14 (profiles) first**.
+The remaining work is Hub BACKLOG items 12 (watching) and 13 (the tab tidy pass); 14 (profiles) and 15 closed 2026-09-20.
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 
@@ -48,10 +48,19 @@ description of the technique; keep it true.** Do not:
 
 ## Shape
 
-- **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` (⚠ account-wide,
-  `_version = 1` — **ruled WRONG by the owner 2026-09-20**: it becomes per-character profiles via
-  `UI.profileBlock`, Hub BACKLOG item 14, before any other GU work; `EnsureTexts` / `EnsureAuras`
-  seed the two lists only when the key is ABSENT, so an emptied list stays empty), the arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
+- **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` **v2 — PROFILES**
+  (2026-09-20, the owner's ruling): `{ _version = 2, profiles = { [name] = { player, target } },
+  charProfiles = { ["Name-Realm"] = name } }`. The engine's `db` local IS the active profile, so
+  every `db[which]` read is unchanged; `LoadProfile` swaps it and re-applies both units.
+  `PrepareProfile` fills defaults + the field migrations + the seeded lists for any profile before
+  it is drawn. An unbound character lands on "Default" (the migrated v1 config) else the first
+  name; login writes the binding. New = factory, Copy = deep copy, Rename-to-same = no-op,
+  Delete refuses the last one and returns the fallback (Default if it exists) so the tab can say
+  where the character landed; `ProfileUsers(name)` feeds the Hub's delete gate. ⚠ The mid-combat
+  ruling (the owner, 2026-09-20, **for GU only**): a config change need not apply live in a
+  fight, it must land at regen. `EnsureTexts` / `EnsureAuras` seed the two lists only when the
+  key is ABSENT, so an emptied list stays empty, and `EnsureAuras` DROPS a saved group of the
+  removed `spell` kind. The arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
   `SetFromDuration`; `rampOnly` = the ramp layer alone, a colour fading to transparent), the
   per-unit frames with a ring HOLDER per ring (each ring owns a band of **16** frame levels: track
   +0..+2, fill +3..+6, the health ring's shield copy +11..+14, the kick tick +15; rings in
@@ -61,8 +70,10 @@ description of the technique; keep it true.** Do not:
   ramp-only copy of the arc under a `gate` frame whose alpha is plain 0 then the secret absorb
   amount, and an `inner` frame carrying the user's opacity; the fade fits the arc's chord via
   `RampAt`), the class-resource
-  segments (`LayoutResource`; count = `UnitPowerMax`, hides at 0; Death Knight runes are NOT a
-  power type and are unbuilt), the cast ring (`RefreshCast`/`CastTick`: the player's times are
+  segments (`LayoutResource`; count = `UnitPowerMax`, hides at 0; **Death Knight runes** ARE a
+  power type for the count — 6 — but `UnitPowerPercent` does not take them, so `Refresh` counts
+  the READY runes through `GetRuneCooldown` and feeds the plain fraction, on `RUNE_POWER_UPDATE`;
+  their colour is the class red, not `PowerBarColor.RUNES`' grey — owner-QA'd 2026-09-20), the cast ring (`RefreshCast`/`CastTick`: the player's times are
   PLAIN — clock arithmetic; **a target's are secret in every part on a restricted map**, and the
   duration object then drives the ring's own percent curves through `EvaluateElapsedPercent` /
   `EvaluateRemainingPercent` — `arc:SetFromDuration`, Hub FINDINGS §18.10; ★ a ROTATION evaluation
@@ -85,25 +96,36 @@ description of the technique; keep it true.** Do not:
   845K). Readers never branch on a secret. `GU.TEXT_HELP` is the list the tab prints — keep it next
   to `TAGS`. Pieces are child frames (own level) with a FontString; `LayoutTexts` from ApplyLayout,
   `RefreshTexts(f, unit[, group])` from Refresh / the cast tick.
-- **`GloomsUnitFrames_Auras.lua` — the AURA GROUPS.** `cfg.auras` is a list; kinds `buffs` /
+- **`GloomsUnitFrames_Auras.lua` — the AURA GROUPS.** `cfg.auras` is a list; TWO kinds, `buffs` /
   `debuffs` (an `AuraContainer` GROUP, `AddAuraGroup` with the engine flow layout, narrowed by
   `ac.filter` → `GU:AuraFilter` builds the token string + `candidateFilters`; `GU.AURA_CLASSES` is
-  the catalog) and `spell` (two SLOTS, HELPFUL + HARMFUL, `includeSpellIDs = {[id]=true}`, the
-  button glued to a frame we position). Everything on a button is wired in `initializeFrame` and
-  nowhere else; the Hub shape mask and the Hub effect are started THERE with no trigger (§20).
-  **A Hub effect runs on the `spell` kind ONLY** — a list group with a stale `effect` field ran
-  one per button (2026-09-20). ⚠ In a fight the button's subtree is a forbidden object and size /
-  position writes are refused; the Hub PARKS such an effect until regen (§20.5, BACKLOG 15).
-  A changed filter / size / shape / effect swaps in a fresh container (`Signature`); max count,
-  position and effect PARAMS adjust the live one (`LayoutLive`, `RestyleEffects`). Legacy kinds
-  (`mydebuffs`…) migrate to filters in `MigrateAuraGroup`.
+  the catalog). ⚠ **The `spell` kind ("This spell": one aura by ID wearing a Hub effect) was
+  REMOVED by the owner 2026-09-20** — on the PLAYER the engine ignores `includeSpellIDs` AND
+  `excludeSpellIDs` on HARMFUL auras (Hub FINDINGS §20.6, measured six ways), and a highlight
+  that cannot single out a debuff was "effectively useless". The Hub-effect-under-a-button
+  machinery went with it. **Do not rebuild it on the same call.** The tab greys the two spell-list
+  boxes on a PLAYER Debuffs group and says why; they work on Buffs and on the target. Everything
+  on a button is wired in `initializeFrame` and nowhere else; the Hub shape mask is started THERE
+  with no trigger (§20), its bind verified and retried — **out of combat only**: a button wired
+  mid-fight is forbidden from the start and `AddMaskTexture` throws (§20.7). A changed filter /
+  size / shape swaps in a fresh container (`Signature`); max count and position adjust the live
+  one (`LayoutLive`). Legacy kinds (`mydebuffs`…) migrate to filters in `MigrateAuraGroup`.
+  **The PREVIEW** (`LayoutAuraPreview`, `GU:SetAuraPreview`): sample icons from the spellbook drawn
+  by our own textures where the selected group's buttons will be, by the same rules the engine's
+  flow layout is given, while the tab's Auras section is open — the engine only draws buttons for
+  auras you have, so an empty group was invisible while being placed. Its pixel alignment against
+  a live group is unverified (BACKLOG 12.3).
 - **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
-  order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 9`; bump in the same commit as any newer call).
-  Rail: the mark, Player / Target, **Copy from the other unit** (everything but position), Reset.
-  Editor: a GB-style accordion — Position · Layer · Visibility · **Texts** (list + editor, the
-  shortcode list a popover that INSERTS on click) · **Auras** (list + editor; filters behind a cog
-  for Buffs/Debuffs, the schema-driven effect settings behind a cog for This spell) · one section
-  per ring (the resource section only for Player). **Every section body is a `UI.grid`** (two cells
+  order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 10`; bump in the same commit as any newer call).
+  Rail: the mark, **the PROFILE block** (the suite's `UI.profileBlock`, with `users` for the delete
+  gate), UNITS — Player / Target as plain rows (the ring summary that used to share the line was
+  removed: it collided, and the owner asked what it was even for) — **Copy from the other unit**
+  (everything but position), Reset. Editor: a GB-style accordion — Position · Layer · Visibility ·
+  **Texts** (list + editor, the shortcode list a popover that INSERTS on click) · **Auras** (list +
+  editor; filters behind a cog, its popover titled "FILTERS — BUFFS / DEBUFFS" because the two
+  panels differ; the spell-list boxes render "Name (ID)" and resolve by the ID so a zone debuff's
+  entry survives a round trip) · one section per ring (the resource section only for Player).
+  Number cells (`cNum`) set the Hub's `stepper` so Up / Down apply live. **Every section body is a `UI.grid`** (two cells
   per line — the 2026-09-20 compaction, Hub BACKLOG 13): the deep clusters (shield tint, interrupt
   colouring) sit behind `UI.cog` popovers, one-line conditionals (gradient end, drain shift,
   breakpoint) appear inline under their switch, and a section's `refresh` ends with
@@ -139,7 +161,7 @@ description of the technique; keep it true.** Do not:
 Symlinked into the client at `…/Interface/AddOns/GloomsUnitFrames`. QA by the owner (non-dev): ONE
 copy-paste step at a time, verify before claiming, BugSack error text first — **and the picture
 over any `pcall`**. `/reload` is enough, including for new files and regenerated art. **The GitHub
-repo `GloomSuite/GloomsUnitFrames` does not exist yet** (2026-09-19); the packager config and
-workflow are in place for when the owner says it goes up — public, org-owned, private membership
-(Hub `CLAUDE.md` PRIVACY). Tags cut a GitHub Release as a version marker only; the owner runs the
-symlink.
+repo `GloomSuite/GloomsUnitFrames` exists since 2026-09-20** — public, org-owned, private
+membership, default branch `master`, verified anonymously (author `Gloom`, no linked account; Hub
+`CLAUDE.md` PRIVACY). Untagged so far. Tags cut a GitHub Release as a version marker only; the
+owner runs the symlink.
