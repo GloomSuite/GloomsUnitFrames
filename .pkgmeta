@@ -1,0 +1,23 @@
+# BigWigs packager config. Publishes to GitHub Releases ONLY (no CurseForge/
+# Wago) — same model as the rest of the suite. A release is a version marker;
+# the owner runs the addon as a symlink (Hub SUITE-STATE).
+
+package-as: GloomsUnitFrames
+
+enable-nolib-creation: no
+
+# No embedded libraries, deliberately. Unit Frames loads none — no Libs\ lines in
+# the TOC. It hard-depends on GloomsHub (`## Dependencies: GloomsHub`) and gets
+# LibStub, LibDataBroker, LibDBIcon and the design toolkit (LibGloomSkin-1.0)
+# from the Hub at runtime. Do NOT add any of them as an external here: a second
+# copy is exactly the drift the suite exists to prevent.
+
+# Keep repo-management files out of the packaged addon zip.
+ignore:
+  - README.md
+  - CLAUDE.md
+  - .claude
+  - .github
+  - .gitignore
+  - .pkgmeta
+  - docs

@@ -1,0 +1,12 @@
+## Interface: 120100
+## Title: Gloom's Unit Frames
+## Notes: Circular health, power and cast displays for the player and the target — arcs of any span, placeable, layerable, driven safely from 12.1's secret values. Part of the Gloom Suite.
+## IconTexture: Interface\AddOns\GloomsUnitFrames\Media\ui\logo.png
+## Author: Gloom
+## Version: @project-version@
+## Dependencies: GloomsHub
+## X-Website: https://github.com/GloomSuite/GloomsUnitFrames
+## SavedVariables: GloomsUnitFramesDB
+
+GloomsUnitFrames.lua
+GloomsUnitFrames_Tab.lua

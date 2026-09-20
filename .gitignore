@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# BigWigs packager output
+/.release/
+
+# Embedded libraries — fetched by the packager at release time (see .pkgmeta).
+/Libs/
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+
+# luac -l byproduct
+luac.out

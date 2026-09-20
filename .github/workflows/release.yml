@@ -1,0 +1,31 @@
+name: Package and release
+
+# Cut a release whenever a version tag is pushed (e.g. v0.1.0). The BigWigs
+# packager builds the addon zip and publishes a GitHub Release; WoWUp installs
+# and auto-updates from those releases via the repo URL.
+on:
+  push:
+    tags:
+      - "**"
+
+# ★ REQUIRED — do not delete. The GloomSuite org sets
+#   default_workflow_permissions: read, so a workflow without this block cannot
+#   create a release and the run fails at publish time.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package and create GitHub release
+        uses: BigWigsMods/packager@v2
+        env:
+          # Only the built-in token — no CurseForge/Wago/WowInterface secrets,
+          # so the packager publishes a GitHub Release and nothing else.
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
