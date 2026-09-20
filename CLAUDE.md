@@ -15,7 +15,8 @@
 > another one.** Before any change, decide which repo OWNS it and say so in one line, up front.
 >
 > **Belongs HERE (`~/GloomsUnitFrames`):** the rings (health / power / class resource / cast), their
-> placement, colours, rounding, the cast + interrupt logic, and the contents of the Unit Frames tab.
+> placement, colours, rounding, the cast + interrupt logic, the TEXT pieces, the AURA groups, and the
+> contents of the Unit Frames tab.
 > **Belongs in `~/GloomsHub`:** the Suite window + tab API · the shared `LibGloomSkin` toolkit ·
 > media registration/resolver · the one minimap launcher · the suite docs and backlog.
 > Full rule + ownership table: `~/GloomsHub/CLAUDE.md`.
@@ -29,7 +30,8 @@ The remaining milestones are Hub BACKLOG item 12.
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 
-**Hub FINDINGS §18.** On 12.1 health is a SECRET number for every unit everywhere (the player's own,
+**Hub FINDINGS §18** (the rings), **§19** (absorbs: no arc, a presence gate) and **§20** (what an
+aura button's children can and cannot do). On 12.1 health is a SECRET number for every unit everywhere (the player's own,
 on a training dummy). The ring is drawn by handing secrets to widget setters the engine evaluates —
 curves (`C_CurveUtil`) + rotating half-plane masks — and §18 records the sink table (six setters
 that accept a secret and DO NOTHING among them), the three-mask limit, the zero-alpha rule and the
@@ -40,27 +42,58 @@ description of the technique; keep it true.** Do not:
 - use `Texture:SetGradient` (a gradient texture ignores secret alpha) or `SetRotation` on a fill
   texture (masks clip it half a pixel tighter — a fringe);
 - rely on ARTWORK sublevels for draw order across masked textures (frame levels only);
-- add a fourth mask to a texture (hard error at login).
+- add a fourth mask to a texture (hard error at login);
+- TRUTH-TEST a secret — functions that may return one return a PLAIN `ok` first (`UnitColor`);
+- expect any script on a frame under an aura button to run, or its `IsShown` to be plain (§20).
 
 ## Shape
 
 - **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` (account-wide,
-  `_version = 1`), the arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
-  `SetFromDuration`), the per-unit frames with a ring HOLDER per ring (each ring owns a band of 8
-  frame levels; rings in `GU.RINGS` order: health, power, resource, cast), the class-resource
+  `_version = 1`; `EnsureTexts` / `EnsureAuras` seed the two lists only when the key is ABSENT, so
+  an emptied list stays empty), the arc renderer (`NewArc`/`Configure`/`SetFromUnit`/`SetFromPlain`/
+  `SetFromDuration`; `rampOnly` = the ramp layer alone, a colour fading to transparent), the
+  per-unit frames with a ring HOLDER per ring (each ring owns a band of **16** frame levels: track
+  +0..+2, fill +3..+6, the health ring's shield copy +11..+14, the kick tick +15; rings in
+  `GU.RINGS` order: health, power, resource, cast — so rings sit at 1–64 of the unit frame), the
+  health fill's colour (`UnitColor`: class for a player, reaction for an NPC, tapped grey; a PLAIN
+  `ok` ahead of possibly-secret channels; a gradient wins over it), the shield WASH (`r.shield`: a
+  ramp-only copy of the arc under a `gate` frame whose alpha is plain 0 then the secret absorb
+  amount, and an `inner` frame carrying the user's opacity; the fade fits the arc's chord via
+  `RampAt`), the class-resource
   segments (`LayoutResource`; count = `UnitPowerMax`, hides at 0; Death Knight runes are NOT a
   power type and are unbuilt), the cast ring (`RefreshCast`/`CastTick`: the player's times are
   PLAIN — clock arithmetic; a target with secret times uses the duration object and hides if even
   the total is secret), the interrupt colouring (`KickColor`, EUI's spell table; `KickExtras` for
   the mid-cast tint + the tick, only when the "not interruptible" flag is PLAIN), and a small API
   the tab drives: `Config · ApplyLayout · Nudge · SetStrata · SetCondition · Reset · CopyFrom ·
-  SetEditing · SetCastPreview · OnChange`. `/gu debug` / `/gu debug target` print every ring's
-  state (secrets print as SECRET; a secret can be READ on screen by rendering it as text).
+  SetEditing · SetCastPreview · OnChange · UnitColor · ClassResource · CastInfo`. `/gu debug` /
+  `/gu debug target` print every ring's state (secrets print as SECRET; a secret can be READ on
+  screen by rendering it as text); `/gu probe` (the absorb doors, §19), `/gu gate` (the presence
+  gate, three squares), `/gu auras` (per-group container state) and `/gu text [target] <template>`
+  are QA tools kept in the addon because a `/run` over 255 characters does nothing.
+- **`GloomsUnitFrames_Text.lua` — the TEXT PIECES.** `cfg.texts` is a list; each piece is a
+  template of words and `[shortcodes]` compiled ONCE into a format string + one reader per code,
+  rendered by a single `SetFormattedText` whose arguments may be secret (`AbbreviateNumbers` for
+  845K). Readers never branch on a secret. `GU.TEXT_HELP` is the list the tab prints — keep it next
+  to `TAGS`. Pieces are child frames (own level) with a FontString; `LayoutTexts` from ApplyLayout,
+  `RefreshTexts(f, unit[, group])` from Refresh / the cast tick.
+- **`GloomsUnitFrames_Auras.lua` — the AURA GROUPS.** `cfg.auras` is a list; kinds `buffs` /
+  `debuffs` (an `AuraContainer` GROUP, `AddAuraGroup` with the engine flow layout, narrowed by
+  `ac.filter` → `GU:AuraFilter` builds the token string + `candidateFilters`; `GU.AURA_CLASSES` is
+  the catalog) and `spell` (two SLOTS, HELPFUL + HARMFUL, `includeSpellIDs = {[id]=true}`, the
+  button glued to a frame we position). Everything on a button is wired in `initializeFrame` and
+  nowhere else; the Hub shape mask and the Hub effect are started THERE with no trigger (§20).
+  A changed filter / size / shape / effect swaps in a fresh container (`Signature`); max count,
+  position and effect PARAMS adjust the live one (`LayoutLive`, `RestyleEffects`). Legacy kinds
+  (`mydebuffs`…) migrate to filters in `MigrateAuraGroup`.
 - **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
   order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 4`; bump in the same commit as any newer call).
   Rail: the mark, Player / Target, **Copy from the other unit** (everything but position), Reset.
-  Editor: a GB-style accordion — Position · Layer · Visibility · Center text · one section per
-  ring (the resource section only for Player). Everything applies live; there is no Save. **The tab
+  Editor: a GB-style accordion — Position · Layer · Visibility · **Texts** (list + editor, the
+  shortcode help printed from `GU.TEXT_HELP`) · **Auras** (list + editor; a two-column tri-state
+  filter block for Buffs/Debuffs, a schema-driven effect-settings block for This spell, built from
+  `GloomsHub.Effects` params) · one section per ring (the resource section only for Player).
+  ⚠ **The owner finds the tab too STACKED** — Hub BACKLOG item 13 is the compaction pass. Everything applies live; there is no Save. **The tab
   is the lock**: `SetEditing(which)` on the container's OnShow makes the selected unit draggable
   with a green outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a
   fake 5s cast on repeat (`SetCastPreview`).
@@ -70,7 +103,10 @@ description of the technique; keep it true.** Do not:
   shape is baked in; custom art wants its own `<name>-ramp`), `halfplane-ccw/cw.png` (exact 180°,
   soft on the leading half of the edge, hard on the trailing), `halfplane-lead-ccw/cw.png` (180° +
   1.5° on the start side, binary), `hole.png` (transparent disc r=120/128, used with `CLAMP`),
-  `cap.png` (hard 3° wedge). **The Gu mark (`Media/ui/logo.png`) is still the Hub's logo — owed.**
+  `cap.png` (hard 3° wedge), `disc-ramp-10.png … disc-ramp-90.png` (the ramp with its 0→1 over
+  that percent of the diameter, centred — the shield wash picks the one matching the arc's chord;
+  512² RGBA, alpha = ramp × disc coverage at radius 500 px, 4× supersampled edge). **The Gu mark
+  (`Media/ui/logo.png`) is still the Hub's logo — owed.**
 - **Trap fixed in the tab, worth knowing:** a setting getter must test `== nil`, never `v or
   default` — an OFF switch (`false`) would read as its default and stick.
 

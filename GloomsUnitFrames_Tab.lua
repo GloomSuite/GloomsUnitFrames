@@ -260,7 +260,7 @@ end
 -- kind: "health" · "power" (power-type colour toggle) · "resource" (segments:
 -- gap row + resource-colour toggle, no shift). Fills an accordion body.
 local function ringSection(sec, key, title, kind)
-  local isPower, isResource, isCast = kind == "power", kind == "resource", kind == "cast"
+  local isHealth, isPower, isResource, isCast = kind == "health", kind == "power", kind == "resource", kind == "cast"
   local w = {}
 
   w.enabled = toggleRow(sec, -42, "Show this ring", rnum(key, "enabled", true), setRing(key, "enabled"),
@@ -307,7 +307,34 @@ local function ringSection(sec, key, title, kind)
     function(v) local rc = RingCfg(key); if rc then rc.trackAlpha = v / 100; GU:ApplyLayout(selected) end end,
     "percent — the unfilled part of the ring")
   cy = cy - 54
-  if isPower then
+  if isHealth then
+    w.powerColor = toggleRow(sec, cy, "Use the unit's class color",
+      rnum(key, "classColor", true), setRing(key, "classColor"),
+      "A player's class color; for an NPC, hostile red, neutral yellow, friendly green — instead of the Color below. Solid mode only: a gradient wins over it. The drain shift still applies on top.")
+    cy = cy - 28
+    w.shieldOn = toggleRow(sec, cy, "Tint while shielded", rnum(key, "shieldTint", false),
+      function(v) setRing(key, "shieldTint")(v); sec:refresh() end,
+      "While the unit has an absorb shield, a wash of the color below lies over the filled part of the ring, fading out to nothing in the direction you set. The game decides when — the shield's size is not something an addon may read on 12.1, so this shows presence, not amount.")
+    cy = cy - 28
+    w.shieldColor = colorRow(sec, cy, "Shield tint color", rnum(key, "shieldColor"), setRing(key, "shieldColor"), nil,
+      "Unit Frames › " .. title .. " shield tint")
+    cy = cy - 28
+    w.shieldAlpha = numRow(sec, cy, "Shield tint opacity", 0, 100,
+      function() local rc = RingCfg(key); return rc and math.floor((rc.shieldAlpha or 0.8) * 100 + 0.5) or 80 end,
+      function(v) local rc = RingCfg(key); if rc then rc.shieldAlpha = v / 100; GU:ApplyLayout(selected) end end,
+      "percent — the wash at its strongest end")
+    cy = cy - 50
+    w.shieldAuto = toggleRow(sec, cy, "Fade along the arc", rnum(key, "shieldAuto", true),
+      function(v) setRing(key, "shieldAuto")(v); sec:refresh() end,
+      "Strongest at the arc's start, gone by its end, whatever the span and angle. Off: set the width and direction yourself. A full 360° ring always uses the manual settings.")
+    cy = cy - 28
+    w.shieldWidth = numRow(sec, cy, "Shield fade width", 10, 100, rnum(key, "shieldWidth", 70), setRing(key, "shieldWidth"),
+      "percent of the ring's diameter the fade runs across, centred — 100 is edge to edge")
+    cy = cy - 50
+    w.shieldAngle = numRow(sec, cy, "Shield fade direction", 0, 359, rnum(key, "shieldAngle", 180), setRing(key, "shieldAngle"),
+      "degrees — the wash is strongest on this side and fades to nothing across the ring: 180 = full on the left, 0 = full on the right, 90 = top")
+    cy = cy - 50
+  elseif isPower then
     w.powerColor = toggleRow(sec, cy, "Use the power type's color",
       rnum(key, "powerColor", true), setRing(key, "powerColor"),
       "Mana blue, rage red, energy yellow and so on, instead of the color below.")
@@ -414,6 +441,15 @@ local function ringSection(sec, key, title, kind)
     end
     local mode = rc.colorMode or "solid"
     w.mode.sync(mode)
+    if isHealth then
+      w.powerColor:show(mode ~= "gradient")
+      w.shieldOn:refresh(); w.shieldColor:refresh(); w.shieldAlpha:refresh()
+      w.shieldAuto:refresh(); w.shieldWidth:refresh(); w.shieldAngle:refresh()
+      local son = rc.shieldTint and true or false
+      local manual = son and (rc.shieldAuto == false or (rc.span or 180) >= 360)
+      w.shieldColor:show(son); w.shieldAlpha:show(son); w.shieldAuto:show(son)
+      w.shieldWidth:show(manual); w.shieldAngle:show(manual)
+    end
     w.color:refresh(); w.color2:refresh(); w.angle:refresh()
     w.color2:show(mode == "gradient"); w.angle:show(mode == "gradient")
     if w.shift then
@@ -516,6 +552,634 @@ local function makeSection(title, height, build)
   return sc
 end
 
+
+-- --------------------------------------------------------------------------
+-- TEXTS: any number of text pieces per unit — a list, then the selected
+-- piece's editor. The section's height follows the list.
+-- --------------------------------------------------------------------------
+local TEXT_ROW_H = 26
+local EDITOR_H   = 780
+local textSel = {}          -- per unit: the selected piece's index
+
+local function TextList() local cfg = Cfg(); return cfg and cfg.texts or nil end
+local function TextCfg()
+  local list = TextList(); if not list then return nil end
+  local i = textSel[selected] or 1
+  return list[i], i
+end
+local function tget(field, default)
+  return function() local tc = TextCfg(); return tc and orDefault(tc[field], default) end
+end
+local function tset(field)
+  return function(v) local tc = TextCfg(); if tc then tc[field] = v; GU:ApplyLayout(selected) end end
+end
+local function CopyTable(v)
+  if type(v) ~= "table" then return v end
+  local t = {}; for k, x in pairs(v) do t[k] = CopyTable(x) end; return t
+end
+local function NewTextPiece(template)
+  local t = CopyTable(GU.TEXT_DEFAULTS)
+  t.template = template or "[name]"
+  return t
+end
+
+local function textsSection(b, sc)
+  local w = {}
+  local listRows = {}
+
+  local function selectPiece(i)
+    textSel[selected] = i
+    RefreshEditor()
+  end
+
+  local btnY = 0  -- set by refresh
+  w.add = flatButton(b, 90, 22, COLOR.heroic, "+ Add text", 11); w.add:SetBase(0.2)
+  w.dup = flatButton(b, 90, 22, COLOR.heroic, "Duplicate", 11);  w.dup:SetBase(0.2)
+  w.del = flatButton(b, 90, 22, COLOR.heroic, "Delete", 11);     w.del:SetBase(0.2)
+  w.add:SetScript("OnClick", function()
+    local list = TextList(); if not list then return end
+    list[#list + 1] = NewTextPiece("[name]")
+    GU:ApplyLayout(selected); selectPiece(#list)
+  end)
+  w.dup:SetScript("OnClick", function()
+    local list = TextList(); local tc, i = TextCfg()
+    if not (list and tc) then return end
+    local t = CopyTable(tc); t.y = (t.y or 0) - (t.size or 22) - 4
+    table.insert(list, i + 1, t)
+    GU:ApplyLayout(selected); selectPiece(i + 1)
+  end)
+  w.del:SetScript("OnClick", function()
+    local list = TextList(); local tc, i = TextCfg()
+    if not (list and tc) then return end
+    table.remove(list, i)
+    GU:ApplyLayout(selected); selectPiece(math.max(1, math.min(i, #list)))
+  end)
+  attachTip(w.add, "Add a text", "A new piece showing the unit's name, placed at the centre. Move it with Offset X / Y below.")
+  attachTip(w.dup, "Duplicate", "A copy of the selected piece, one line lower.")
+
+  -- The editor for the selected piece, anchored under the list.
+  local ed = CreateFrame("Frame", nil, b)
+  ed:SetPoint("TOPLEFT", 0, 0); ed:SetPoint("TOPRIGHT", 0, 0); ed:SetHeight(EDITOR_H)
+  w.ed = ed
+
+  w.enabled = toggleRow(ed, -4, "Show this text", tget("enabled", true), tset("enabled"))
+
+  label(ed, "Template — words and [shortcodes], in any order", PAD, -36)
+  local box = flatEditBox(ed, 100, 22)
+  box:ClearAllPoints(); box:SetPoint("TOPLEFT", PAD, -52); box:SetPoint("TOPRIGHT", -PAD, -52); box:SetHeight(22)
+  box:SetMaxLetters(200)
+  local function commit(self)
+    local tc = TextCfg(); if not tc then return end
+    local v = self:GetText() or ""
+    if v ~= tc.template then tc.template = v; GU:ApplyLayout(selected); sc.refresh() end
+  end
+  box:SetScript("OnEnterPressed", function(self) self:ClearFocus(); commit(self) end)
+  box:HookScript("OnEditFocusLost", commit)
+  box:SetScript("OnEscapePressed", function(self) local tc = TextCfg(); self:SetText(tc and tc.template or ""); self:ClearFocus() end)
+  w.box = box
+
+  -- The shortcode list, straight from the engine so it cannot drift.
+  label(ed, "Shortcodes", PAD, -86, 12, COLOR.purple)
+  local hy = -104
+  for _, h in ipairs(GU.TEXT_HELP) do
+    local code = newText(ed, FONT.body, 11, TEXT, "LEFT"); code:SetPoint("TOPLEFT", PAD, hy); code:SetText(h[1])
+    local what = newText(ed, FONT.body, 11, MUTE, "LEFT"); what:SetPoint("TOPLEFT", PAD + 230, hy)
+    what:SetPoint("TOPRIGHT", -PAD, hy); what:SetJustifyH("LEFT"); what:SetWordWrap(false); what:SetText(h[2])
+    hy = hy - 14
+  end
+  hy = hy - 10
+
+  label(ed, "Font", PAD, hy)
+  w.font = UI.dropdown(ed, 220,
+    function() local tc = TextCfg(); local f = tc and tc.font; return (f and f ~= "") and f or "Suite default (Khand)" end,
+    function()
+      local opts = { { label = "Suite default (Khand)", value = "" } }
+      local lsm = LibStub and LibStub("LibSharedMedia-3.0", true)
+      if lsm then for _, name in ipairs(lsm:List("font")) do opts[#opts + 1] = { label = name, value = name } end end
+      return opts
+    end,
+    function() local tc = TextCfg(); return tc and tc.font or "" end,
+    function(v) local tc = TextCfg(); if tc then tc.font = (v ~= "") and v or nil; GU:ApplyLayout(selected) end end)
+  w.font:SetPoint("TOPRIGHT", -PAD, hy + 3)
+  hy = hy - 32
+  w.size = numRow(ed, hy, "Size", 6, 72, tget("size", 22), tset("size"))
+  hy = hy - 48
+  label(ed, "Outline", PAD, hy)
+  w.outline = choiceRow(ed, {
+    { "none", "None" }, { "thin", "Thin" }, { "thick", "Thick" },
+  }, 70, 20, 80, hy + 2, 6, function(v) tset("outline")(v); sc.refresh() end)
+  hy = hy - 28
+  w.shadow = toggleRow(ed, hy, "Drop shadow", tget("shadow", true), tset("shadow"))
+  hy = hy - 32
+  w.color = colorRow(ed, hy, "Color", tget("color"), tset("color"), nil, "Unit Frames › text color")
+  hy = hy - 28
+  w.classColor = toggleRow(ed, hy, "Use the unit's class color", tget("classColor", false), tset("classColor"),
+    "A player's class color; for an NPC, hostile red, neutral yellow, friendly green — instead of the Color above.")
+  hy = hy - 36
+  w.x = numRow(ed, hy, "Offset X", -800, 800, tget("x", 0), tset("x"))
+  hy = hy - 46
+  w.y = numRow(ed, hy, "Offset Y", -800, 800, tget("y", 0), tset("y"))
+  hy = hy - 48
+  label(ed, "Align", PAD, hy)
+  w.justify = choiceRow(ed, {
+    { "LEFT", "Left", "The text grows to the right from its offset." },
+    { "CENTER", "Center", "The text is centred on its offset." },
+    { "RIGHT", "Right", "The text grows to the left from its offset." },
+  }, 70, 20, 80, hy + 2, 6, function(v) tset("justify")(v); sc.refresh() end)
+  hy = hy - 30
+  w.maxWidth = numRow(ed, hy, "Max width", 0, 600, tget("maxWidth", 0), tset("maxWidth"),
+    "px — longer text is cut with …  (0 = no limit)")
+  hy = hy - 52
+  w.level = numRow(ed, hy, "Layer", 0, 100, tget("level", 70), tset("level"),
+    "higher draws on top — the rings sit at 1–64 (health 1–16, power 17–32, resource 33–48, cast 49–64)")
+
+  function sc.refresh()
+    local list = TextList()
+    if not list then return end
+    local n = #list
+    if (textSel[selected] or 1) > n then textSel[selected] = n end
+    local cur = textSel[selected] or 1
+    -- the list
+    for i = 1, n do
+      local row = listRows[i]
+      if not row then
+        row = CreateFrame("Button", nil, b)
+        row:SetHeight(TEXT_ROW_H)
+        row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetAllPoints()
+        row.sel:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.28)
+        local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.07)
+        row.num = newText(row, FONT.body, 11, MUTE, "LEFT"); row.num:SetPoint("LEFT", 8, 0)
+        row.text = newText(row, FONT.body, 12, TEXT, "LEFT")
+        row.text:SetPoint("LEFT", 30, 0); row.text:SetPoint("RIGHT", -8, 0); row.text:SetWordWrap(false)
+        listRows[i] = row
+      end
+      row:ClearAllPoints()
+      row:SetPoint("TOPLEFT", PAD - 8, -8 - (i - 1) * TEXT_ROW_H); row:SetPoint("TOPRIGHT", -PAD + 8, -8 - (i - 1) * TEXT_ROW_H)
+      row.num:SetText(tostring(i))
+      local tc = list[i]
+      local tpl = tc.template or ""
+      row.text:SetText(tpl ~= "" and tpl or "(empty)")
+      row.text:SetTextColor(tc.enabled == false and MUTE.r or TEXT.r, tc.enabled == false and MUTE.g or TEXT.g, tc.enabled == false and MUTE.b or TEXT.b)
+      row.sel:SetShown(i == cur)
+      row:SetScript("OnClick", function() selectPiece(i) end)
+      row:Show()
+    end
+    for i = n + 1, #listRows do listRows[i]:Hide() end
+    btnY = -8 - n * TEXT_ROW_H - 6
+    w.add:ClearAllPoints(); w.add:SetPoint("TOPLEFT", PAD, btnY)
+    w.dup:ClearAllPoints(); w.dup:SetPoint("LEFT", w.add, "RIGHT", 6, 0)
+    w.del:ClearAllPoints(); w.del:SetPoint("LEFT", w.dup, "RIGHT", 6, 0)
+    w.dup:SetEnabled(n > 0); w.del:SetEnabled(n > 0)
+    -- the editor
+    local tc = list[cur]
+    ed:ClearAllPoints(); ed:SetPoint("TOPLEFT", 0, btnY - 34); ed:SetPoint("TOPRIGHT", 0, btnY - 34)
+    ed:SetShown(tc ~= nil)
+    sc.height = -(btnY - 34) + (tc and EDITOR_H or 0) + 8
+    b:SetHeight(sc.height)
+    if not tc then return end
+    w.enabled:refresh()
+    if not w.box:HasFocus() then w.box:SetText(tc.template or "") end
+    w.font:refresh(); w.size:refresh()
+    w.outline.sync(tc.outline or "none"); w.shadow:refresh()
+    w.color:refresh(); w.classColor:refresh()
+    w.x:refresh(); w.y:refresh(); w.justify.sync(tc.justify or "CENTER")
+    w.maxWidth:refresh(); w.level:refresh()
+  end
+end
+
+
+-- --------------------------------------------------------------------------
+-- AURAS: any number of aura groups per unit — a list, then the selected
+-- group's editor. Same bones as the Texts section.
+-- --------------------------------------------------------------------------
+local AURA_EDITOR_H = 730
+local auraSel = {}
+
+local function AuraList() local cfg = Cfg(); return cfg and cfg.auras or nil end
+local function AuraCfg()
+  local list = AuraList(); if not list then return nil end
+  local i = auraSel[selected] or 1
+  return list[i], i
+end
+local function aget(field, default)
+  return function() local ac = AuraCfg(); return ac and orDefault(ac[field], default) end
+end
+local function aset(field)
+  return function(v) local ac = AuraCfg(); if ac then ac[field] = v; GU:ApplyLayout(selected) end end
+end
+local function NewAuraGroup(kind)
+  local t = CopyTable(GU.AURA_DEFAULTS)
+  t.kind = kind or "buffs"
+  return t
+end
+
+local function aurasSection(b, sc)
+  local w = {}
+  local listRows = {}
+  local function selectGroup(i) auraSel[selected] = i; RefreshEditor() end
+
+  w.add = flatButton(b, 110, 22, COLOR.heroic, "+ Add group", 11); w.add:SetBase(0.2)
+  w.dup = flatButton(b, 90, 22, COLOR.heroic, "Duplicate", 11);    w.dup:SetBase(0.2)
+  w.del = flatButton(b, 90, 22, COLOR.heroic, "Delete", 11);       w.del:SetBase(0.2)
+  w.add:SetScript("OnClick", function()
+    local list = AuraList(); if not list then return end
+    list[#list + 1] = NewAuraGroup(selected == "target" and "mydebuffs" or "buffs")
+    GU:ApplyLayout(selected); selectGroup(#list)
+  end)
+  w.dup:SetScript("OnClick", function()
+    local list = AuraList(); local ac, i = AuraCfg()
+    if not (list and ac) then return end
+    local t = CopyTable(ac); t.y = (t.y or 0) - (t.size or 28) - 6
+    table.insert(list, i + 1, t)
+    GU:ApplyLayout(selected); selectGroup(i + 1)
+  end)
+  w.del:SetScript("OnClick", function()
+    local list = AuraList(); local ac, i = AuraCfg()
+    if not (list and ac) then return end
+    table.remove(list, i)
+    GU:ApplyLayout(selected); selectGroup(math.max(1, math.min(i, #list)))
+  end)
+  attachTip(w.add, "Add an aura group", "A new row of icons at the centre of the frame. Move it with Offset X / Y below.")
+
+  local ed = CreateFrame("Frame", nil, b)
+  ed:SetPoint("TOPLEFT", 0, 0); ed:SetPoint("TOPRIGHT", 0, 0); ed:SetHeight(AURA_EDITOR_H)
+
+  w.enabled = toggleRow(ed, -4, "Show this group", aget("enabled", true), aset("enabled"))
+  local hy = -36
+  label(ed, "Show", PAD, hy)
+  w.kind = UI.dropdown(ed, 220,
+    function() local ac = AuraCfg(); return ac and GU.AURA_KIND_LABEL[ac.kind] or "?" end,
+    function()
+      local opts = {}
+      for _, k in ipairs(GU.AURA_KINDS) do opts[#opts + 1] = { label = k[2], value = k[1] } end
+      return opts
+    end,
+    function() local ac = AuraCfg(); return ac and ac.kind end,
+    function(v) aset("kind")(v); sc.refresh() end)
+  w.kind:SetPoint("TOPRIGHT", -PAD, hy + 3)
+  attachTip(w.kind, "What this group shows",
+    "\"My\" = only what you cast. Dispellable = debuffs your class can remove. Stealable = buffs you could purge or spellsteal. Which auras count is decided by the game, so it matches Blizzard's own frames.")
+  hy = hy - 32
+  -- kind "spell": which spell, its silhouette and its effect. These rows share
+  -- the vertical space of the list-kind rows (max / spacing / per row / grow).
+  local spellY = hy
+  w.spellLab = label(ed, "Spell — its ID, or a name the game knows", PAD, spellY)
+  w.spellBox = flatEditBox(ed, 100, 22)
+  w.spellBox:ClearAllPoints(); w.spellBox:SetPoint("TOPLEFT", PAD, spellY - 16); w.spellBox:SetPoint("TOPRIGHT", -PAD, spellY - 16); w.spellBox:SetHeight(22)
+  w.spellBox:SetMaxLetters(80)
+  w.spellNote = newText(ed, FONT.body, 10.5, MUTE, "LEFT"); w.spellNote:SetPoint("TOPLEFT", PAD, spellY - 42)
+  w.spellNote:SetPoint("TOPRIGHT", -PAD, spellY - 42); w.spellNote:SetJustifyH("LEFT"); w.spellNote:SetWordWrap(false)
+  local function commitSpell(self)
+    local ac = AuraCfg(); if not ac then return end
+    local id, name = GU:ResolveSpell(self:GetText())
+    if id then
+      if id ~= ac.spellID then ac.spellID, ac.spellName = id, name; GU:ApplyLayout(selected) end
+    else
+      ac.spellID, ac.spellName = 0, nil; GU:ApplyLayout(selected)
+    end
+    sc.refresh()
+  end
+  w.spellBox:SetScript("OnEnterPressed", function(self) self:ClearFocus(); commitSpell(self) end)
+  w.spellBox:HookScript("OnEditFocusLost", commitSpell)
+  w.spellBox:SetScript("OnEscapePressed", function(self) self:ClearFocus(); sc.refresh() end)
+  local function shapeDropdown(y)
+    local dd = UI.dropdown(ed, 220,
+    function() local ac = AuraCfg(); local hub = GloomsHub; local k = ac and ac.shape
+      return (k and hub.SHAPES and hub.SHAPES[k] and hub.SHAPES[k].label) or "Square (none)" end,
+    function()
+      local opts = { { label = "Square (none)", value = "" } }
+      local hub = GloomsHub
+      for _, k in ipairs(hub.SHAPE_ORDER or {}) do opts[#opts + 1] = { label = hub.SHAPES[k].label, value = k } end
+      return opts
+    end,
+    function() local ac = AuraCfg(); return ac and ac.shape or "" end,
+    function(v) local ac = AuraCfg(); if ac then ac.shape = (v ~= "") and v or nil; if not ac.shape then ac.effect = nil end; GU:ApplyLayout(selected); sc.refresh() end end)
+    dd:SetPoint("TOPRIGHT", -PAD, y + 3)
+    attachTip(dd, "Shape", "The suite's silhouettes — the same catalog Gloom's Bars and Gloom's Auras draw with. The cooldown swipe follows the shape. An effect needs a shape to trace.")
+    return dd
+  end
+  w.shapeLab = label(ed, "Shape", PAD, spellY - 66)
+  w.shape = shapeDropdown(spellY - 66)
+  w.effectLab = label(ed, "Effect", PAD, spellY - 96)
+  w.effect = UI.dropdown(ed, 220,
+    function() local ac = AuraCfg(); local E = GloomsHub.Effects; local m = ac and ac.effect and E and E:Get(ac.effect)
+      return m and m.label or "None" end,
+    function()
+      local opts = { { label = "None", value = "" } }
+      local E = GloomsHub.Effects
+      if E then E:Each(function(mod) opts[#opts + 1] = { label = mod.label, value = mod.id } end) end
+      return opts
+    end,
+    function() local ac = AuraCfg(); return ac and ac.effect or "" end,
+    function(v) local ac = AuraCfg(); if ac then ac.effect = (v ~= "") and v or nil; GU:ApplyLayout(selected); sc.refresh() end end)
+  w.effect:SetPoint("TOPRIGHT", -PAD, spellY - 93)
+  w.spellRows = { w.spellLab, w.spellBox, w.spellNote, w.shapeLab, w.shape, w.effectLab, w.effect }
+
+  -- The effect's own settings, from its schema (CONTRACTS §8): one block per
+  -- module, built on first use, only the current module's block shown. Sits
+  -- under the standard rows; the editor grows by PARAM_BLOCK_H for it.
+  local PARAM_BLOCK_H = 230
+  local paramBlocks = {}
+  w.paramLab = label(ed, "Effect settings", PAD, -AURA_EDITOR_H - 4, 12, COLOR.purple)
+  local function pget(id, key)
+    return function()
+      local ac = AuraCfg(); if not ac then return nil end
+      local saved = ac.effectParams and ac.effectParams[id]
+      if saved and saved[key] ~= nil then return saved[key] end
+      local E = GloomsHub.Effects; local m = E and E:MergeParams(id, nil)
+      return m and m[key]
+    end
+  end
+  local function pset(id, key)
+    return function(v)
+      local ac = AuraCfg(); if not ac then return end
+      ac.effectParams = ac.effectParams or {}; ac.effectParams[id] = ac.effectParams[id] or {}
+      ac.effectParams[id][key] = v
+      GU:ApplyLayout(selected)
+    end
+  end
+  local function paramBlock(id)
+    if paramBlocks[id] then return paramBlocks[id] end
+    local E = GloomsHub.Effects; local mod = E and E:Get(id)
+    local blk = CreateFrame("Frame", nil, ed); blk:SetAllPoints(ed)
+    local rows = {}
+    local y = -AURA_EDITOR_H - 24
+    for _, prm in ipairs(mod and mod.params or {}) do
+      local kind = prm.kind
+      if kind == "color" then
+        rows[#rows + 1] = colorRow(blk, y, prm.label == "Colour" and "Color" or prm.label, pget(id, prm.key), pset(id, prm.key), nil,
+          "Unit Frames › aura effect " .. prm.key)
+        y = y - 28
+      elseif kind == "range" then
+        local dec = (prm.step or 1) < 1
+        rows[#rows + 1] = sliderRow(blk, y, prm.label, prm.min, prm.max, prm.step or 1, pget(id, prm.key), pset(id, prm.key),
+          function(v) return dec and ("%.2f"):format(v) or tostring(math.floor(v + 0.5)) end)
+        y = y - 46
+      elseif kind == "bispeed" then
+        local neg, pos = prm.neg or "CCW", prm.pos or "CW"
+        local g, st = pget(id, prm.key), pset(id, prm.key)
+        rows[#rows + 1] = sliderRow(blk, y, prm.label, -100, 100, 5,
+          function() return math.floor((g() or 0) * 100 + 0.5) end,
+          function(v) st(v / 100) end,
+          function(v) if v == 0 then return "still" end return (v < 0 and neg or pos) .. " " .. math.abs(math.floor(v + 0.5)) .. "%" end,
+          "direction and speed — left of centre is " .. neg .. ", right is " .. pos)
+        y = y - 60
+      elseif kind == "choice" then
+        label(blk, prm.label, PAD, y)
+        local choices = {}
+        for _, c in ipairs(prm.choices or {}) do choices[#choices + 1] = { c[1], c[2] or c[1] } end
+        local cr = choiceRow(blk, choices, 70, 20, 100, y + 2, 6, function(v) pset(id, prm.key)(v) end)
+        rows[#rows + 1] = { refresh = function() cr.sync(pget(id, prm.key)()) end }
+        y = y - 30
+      end
+    end
+    blk.rows = rows
+    paramBlocks[id] = blk
+    return blk
+  end
+  w.paramBlock = function(id)
+    for k, blk in pairs(paramBlocks) do blk:SetShown(k == id) end
+    if not id then return nil end
+    local blk = paramBlock(id); blk:Show()
+    for _, r in ipairs(blk.rows) do if r.refresh then r:refresh() end end
+    return blk
+  end
+  w.PARAM_BLOCK_H = PARAM_BLOCK_H
+
+  -- FILTERS for the Buffs / Debuffs kinds: the engine-decided classes in two
+  -- columns, each an Any / Only / Never tri-state, then "only these spells"
+  -- and "never these spells". One block per polarity, shown for the current
+  -- kind, under the standard rows (same slot the effect settings use).
+  local FILTER_ROW_H = 24
+  local filterBlocks = {}
+  w.filterLab = label(ed, "Filters", PAD, -AURA_EDITOR_H - 4, 12, COLOR.purple)
+  local function classMode(key)
+    local ac = AuraCfg(); return ac and ac.filter and ac.filter.classes and ac.filter.classes[key] or nil
+  end
+  local function setClass(key, mode)
+    local ac = AuraCfg(); if not ac then return end
+    ac.filter = ac.filter or {}; ac.filter.classes = ac.filter.classes or {}
+    ac.filter.classes[key] = mode
+    GU:ApplyLayout(selected)
+  end
+  local function triRow(col, y, cls)
+    local lab = newText(col, FONT.body, 11.5, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 4, y); lab:SetText(cls.label)
+    local btns = {}
+    local prev
+    for _, opt in ipairs({ { "never", "Never" }, { "only", "Only" }, { nil, "Any" } }) do
+      local b = flatButton(col, 40, 17, COLOR.heroic, opt[2], 10); b:SetBase(0.2)
+      if prev then b:SetPoint("RIGHT", prev, "LEFT", -2, 0) else b:SetPoint("TOPRIGHT", col, "TOPRIGHT", -4, y + 1) end
+      b:SetScript("OnClick", function() setClass(cls.key, opt[1]); for _, e in ipairs(btns) do e.b:SetActive(e.v == opt[1]) end end)
+      btns[#btns + 1] = { b = b, v = opt[1] }
+      prev = b
+    end
+    lab:SetPoint("RIGHT", prev, "LEFT", -6, 0); lab:SetWordWrap(false)
+    return { refresh = function() local m = classMode(cls.key); for _, e in ipairs(btns) do e.b:SetActive(e.v == m) end end }
+  end
+  local function spellListBox(parent, y, title, field)
+    label(parent, title, 4, y, 11.5)
+    local box = flatEditBox(parent, 100, 20)
+    box:ClearAllPoints(); box:SetPoint("TOPLEFT", 4, y - 16); box:SetPoint("TOPRIGHT", -4, y - 16); box:SetHeight(20)
+    box:SetMaxLetters(400)
+    local function commit(self)
+      local ac = AuraCfg(); if not ac then return end
+      ac.filter = ac.filter or {}
+      local ids, missed = {}, {}
+      for part in (self:GetText() or ""):gmatch("[^,]+") do
+        local id = GU:ResolveSpell(part)
+        if id then ids[#ids + 1] = id elseif part:match("%S") then missed[#missed + 1] = part:match("^%s*(.-)%s*$") end
+      end
+      ac.filter[field] = ids
+      ac.filter[field .. "Missed"] = (#missed > 0) and table.concat(missed, ", ") or nil
+      GU:ApplyLayout(selected); sc.refresh()
+    end
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus(); commit(self) end)
+    box:HookScript("OnEditFocusLost", commit)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus(); sc.refresh() end)
+    local note = newText(parent, FONT.body, 10, MUTE, "LEFT"); note:SetPoint("TOPLEFT", 4, y - 38); note:SetPoint("TOPRIGHT", -4, y - 38)
+    note:SetJustifyH("LEFT"); note:SetWordWrap(false)
+    return { refresh = function()
+      local ac = AuraCfg(); if not ac then return end
+      local ids = ac.filter and ac.filter[field] or {}
+      if not box:HasFocus() then
+        local names = {}
+        for _, id in ipairs(ids) do local info = C_Spell.GetSpellInfo(id); names[#names + 1] = info and info.name or tostring(id) end
+        box:SetText(table.concat(names, ", "))
+      end
+      local missed = ac.filter and ac.filter[field .. "Missed"]
+      note:SetText(missed and ("not found: " .. missed) or (#ids == 0 and "names or IDs, comma-separated" or (#ids .. " spell" .. (#ids == 1 and "" or "s"))))
+    end }
+  end
+  local function filterBlock(pol)
+    if filterBlocks[pol] then return filterBlocks[pol] end
+    local blk = CreateFrame("Frame", nil, ed); blk:SetAllPoints(ed)
+    local rows = {}
+    local top = -AURA_EDITOR_H - 24
+    rows[#rows + 1] = toggleRow(blk, top, "Only timed auras (hide permanent ones)",
+      function() local ac = AuraCfg(); return ac and ac.filter and ac.filter.timed end,
+      function(v) local ac = AuraCfg(); if ac then ac.filter = ac.filter or {}; ac.filter.timed = v; GU:ApplyLayout(selected) end end)
+    top = top - 30
+    local col1 = CreateFrame("Frame", nil, blk); col1:SetPoint("TOPLEFT", PAD - 4, top); col1:SetPoint("TOPRIGHT", ed, "TOP", -6, top); col1:SetHeight(10)
+    local col2 = CreateFrame("Frame", nil, blk); col2:SetPoint("TOPLEFT", ed, "TOP", 6, top); col2:SetPoint("TOPRIGHT", -PAD + 4, top); col2:SetHeight(10)
+    local list = {}
+    for _, c in ipairs(GU.AURA_CLASSES) do if c.pol == "both" or c.pol == pol then list[#list + 1] = c end end
+    local perCol = math.ceil(#list / 2)
+    for i, c in ipairs(list) do
+      local col = (i <= perCol) and col1 or col2
+      local y = -((i - 1) % perCol) * FILTER_ROW_H
+      rows[#rows + 1] = triRow(col, y, c)
+    end
+    top = top - perCol * FILTER_ROW_H - 6
+    local c1y = top
+    local sl1 = CreateFrame("Frame", nil, blk); sl1:SetPoint("TOPLEFT", PAD - 4, c1y); sl1:SetPoint("TOPRIGHT", ed, "TOP", -6, c1y); sl1:SetHeight(10)
+    local sl2 = CreateFrame("Frame", nil, blk); sl2:SetPoint("TOPLEFT", ed, "TOP", 6, c1y); sl2:SetPoint("TOPRIGHT", -PAD + 4, c1y); sl2:SetHeight(10)
+    rows[#rows + 1] = spellListBox(sl1, 0, "Only these spells", "only")
+    rows[#rows + 1] = spellListBox(sl2, 0, "Never these spells", "never")
+    blk.rows = rows
+    blk.height = 24 + 30 + perCol * FILTER_ROW_H + 6 + 56
+    filterBlocks[pol] = blk
+    return blk
+  end
+  w.filterBlock = function(pol)
+    for k, blk in pairs(filterBlocks) do blk:SetShown(k == pol) end
+    if not pol then return nil end
+    local blk = filterBlock(pol); blk:Show()
+    for _, r in ipairs(blk.rows) do if r.refresh then r:refresh() end end
+    return blk
+  end
+
+  w.max = numRow(ed, hy, "Max icons", 1, 40, aget("max", 8), aset("max"))
+  hy = hy - 46
+  w.spacing = numRow(ed, hy, "Spacing", 0, 20, aget("spacing", 3), aset("spacing"))
+  hy = hy - 46
+  w.perLine = numRow(ed, hy, "Icons per row", 1, 40, aget("perLine", 8), aset("perLine"),
+    "the row wraps after this many; set it to 1 for a column")
+  hy = hy - 52
+  w.growLab = label(ed, "Grow", PAD, hy)
+  w.growFrame = CreateFrame("Frame", nil, ed); w.growFrame:SetAllPoints(ed)
+  w.growH = choiceRow(w.growFrame, {
+    { "RIGHT", "Right", "New icons appear to the right." },
+    { "LEFT",  "Left",  "New icons appear to the left." },
+  }, 70, 20, 80, hy + 2, 6, function(v) aset("growH")(v); sc.refresh() end)
+  w.growV = choiceRow(w.growFrame, {
+    { "UP",   "Up",   "Extra rows stack upward." },
+    { "DOWN", "Down", "Extra rows stack downward." },
+  }, 70, 20, 80 + 2 * 76 + 10, hy + 2, 6, function(v) aset("growV")(v); sc.refresh() end)
+  hy = hy - 30
+  w.orderLab = label(ed, "Order", PAD, hy)
+  w.orderFrame = CreateFrame("Frame", nil, ed); w.orderFrame:SetAllPoints(ed)
+  w.order = choiceRow(w.orderFrame, {
+    { "default",      "Default",        "The game's own order." },
+    { "expiring",     "Expiring first", "The aura with the least time left comes first." },
+    { "expiringLast", "Expiring last",  "The aura with the most time left comes first." },
+  }, 96, 20, 80, hy + 2, 6, function(v) aset("sort")(v); sc.refresh() end)
+  hy = hy - 32
+  w.size = numRow(ed, hy, "Icon size", 10, 96, aget("size", 28), aset("size"))
+  hy = hy - 46
+  w.x = numRow(ed, hy, "Offset X", -800, 800, aget("x", 0), aset("x"))
+  hy = hy - 46
+  w.y = numRow(ed, hy, "Offset Y", -800, 800, aget("y", 0), aset("y"),
+    "the first icon's corner sits here; the group grows away from it")
+  hy = hy - 56
+  w.durOn = toggleRow(ed, hy, "Countdown text", aget("showDuration", true),
+    function(v) aset("showDuration")(v); sc.refresh() end)
+  hy = hy - 28
+  w.durSize = numRow(ed, hy, "Countdown size", 6, 32, aget("durationSize", 11), aset("durationSize"))
+  hy = hy - 46
+  w.stackOn = toggleRow(ed, hy, "Stack count", aget("showStacks", true),
+    function(v) aset("showStacks")(v); sc.refresh() end)
+  hy = hy - 28
+  w.stackSize = numRow(ed, hy, "Stack size", 6, 32, aget("stackSize", 11), aset("stackSize"))
+  hy = hy - 46
+  w.swipe = toggleRow(ed, hy, "Cooldown swipe", aget("swipe", true), aset("swipe"),
+    "A dark sweep across the icon as the aura runs down. Drawn by the game engine.")
+  hy = hy - 28
+  w.border = toggleRow(ed, hy, "Dark edge", aget("border", true), aset("border"))
+  hy = hy - 30
+  w.shapeLab2 = label(ed, "Shape", PAD, hy)
+  w.shape2 = shapeDropdown(hy)
+  hy = hy - 34
+  w.level = numRow(ed, hy, "Layer", 0, 100, aget("level", 60), aset("level"),
+    "higher draws on top — the rings sit at 1–64")
+
+  function sc.refresh()
+    local list = AuraList()
+    if not list then return end
+    local n = #list
+    if (auraSel[selected] or 1) > n then auraSel[selected] = n end
+    local cur = auraSel[selected] or 1
+    for i = 1, n do
+      local row = listRows[i]
+      if not row then
+        row = CreateFrame("Button", nil, b)
+        row:SetHeight(TEXT_ROW_H)
+        row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetAllPoints()
+        row.sel:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.28)
+        local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.07)
+        row.num = newText(row, FONT.body, 11, MUTE, "LEFT"); row.num:SetPoint("LEFT", 8, 0)
+        row.text = newText(row, FONT.body, 12, TEXT, "LEFT")
+        row.text:SetPoint("LEFT", 30, 0); row.text:SetPoint("RIGHT", -8, 0); row.text:SetWordWrap(false)
+        listRows[i] = row
+      end
+      row:ClearAllPoints()
+      row:SetPoint("TOPLEFT", PAD - 8, -8 - (i - 1) * TEXT_ROW_H); row:SetPoint("TOPRIGHT", -PAD + 8, -8 - (i - 1) * TEXT_ROW_H)
+      row.num:SetText(tostring(i))
+      local ac = list[i]
+      if ac.kind == "spell" then
+        row.text:SetText("This spell  ·  " .. (ac.spellName or ((ac.spellID or 0) > 0 and tostring(ac.spellID)) or "(none set)") .. "  ·  " .. tostring(ac.size or 28) .. "px")
+      else
+        row.text:SetText((GU.AURA_KIND_LABEL[ac.kind] or ac.kind or "?") .. "  ·  up to " .. tostring(ac.max or 8) .. " at " .. tostring(ac.size or 28) .. "px")
+      end
+      local off = ac.enabled == false
+      row.text:SetTextColor(off and MUTE.r or TEXT.r, off and MUTE.g or TEXT.g, off and MUTE.b or TEXT.b)
+      row.sel:SetShown(i == cur)
+      row:SetScript("OnClick", function() selectGroup(i) end)
+      row:Show()
+    end
+    for i = n + 1, #listRows do listRows[i]:Hide() end
+    local btnY = -8 - n * TEXT_ROW_H - 6
+    w.add:ClearAllPoints(); w.add:SetPoint("TOPLEFT", PAD, btnY)
+    w.dup:ClearAllPoints(); w.dup:SetPoint("LEFT", w.add, "RIGHT", 6, 0)
+    w.del:ClearAllPoints(); w.del:SetPoint("LEFT", w.dup, "RIGHT", 6, 0)
+    w.dup:SetEnabled(n > 0); w.del:SetEnabled(n > 0)
+    local ac = list[cur]
+    ed:ClearAllPoints(); ed:SetPoint("TOPLEFT", 0, btnY - 34); ed:SetPoint("TOPRIGHT", 0, btnY - 34)
+    ed:SetShown(ac ~= nil)
+    local isSpell = ac and ac.kind == "spell"
+    local withParams = isSpell and ac.effect ~= nil
+    local pol = ac and not isSpell and ((ac.kind == "buffs") and "buff" or "debuff") or nil
+    local fblk = w.filterBlock(pol)
+    w.filterLab:SetShown(fblk ~= nil)
+    local edH = AURA_EDITOR_H + (withParams and w.PARAM_BLOCK_H or 0) + (fblk and fblk.height or 0)
+    ed:SetHeight(edH)
+    sc.height = -(btnY - 34) + (ac and edH or 0) + 8
+    b:SetHeight(sc.height)
+    if not ac then return end
+    w.enabled:refresh(); w.kind:refresh()
+    for _, r in ipairs(w.spellRows) do r:SetShown(isSpell) end
+    w.paramLab:SetShown(withParams)
+    w.paramBlock(withParams and ac.effect or nil)
+    w.max:show(not isSpell); w.spacing:show(not isSpell); w.perLine:show(not isSpell)
+    w.growFrame:SetShown(not isSpell); w.growLab:SetShown(not isSpell)
+    w.orderFrame:SetShown(not isSpell); w.orderLab:SetShown(not isSpell)
+    w.order.sync(ac.sort or "default")
+    w.border:show(not ac.shape)
+    w.shapeLab2:SetShown(not isSpell); w.shape2:SetShown(not isSpell); w.shape2:refresh()
+    if isSpell then
+      if not w.spellBox:HasFocus() then w.spellBox:SetText(ac.spellName or ((ac.spellID or 0) > 0 and tostring(ac.spellID)) or "") end
+      if (ac.spellID or 0) > 0 then w.spellNote:SetText(("ID %d — %s. Shows while this aura is on the %s."):format(ac.spellID, ac.spellName or "?", selected == "target" and "target" or "you"))
+      else w.spellNote:SetText("No spell set. Type an ID (from Wowhead) or the name of one of your own spells, then Enter.") end
+      w.shape:refresh(); w.effect:refresh()
+    end
+    w.max:refresh(); w.size:refresh(); w.spacing:refresh(); w.perLine:refresh()
+    w.growH.sync(ac.growH or "RIGHT"); w.growV.sync(ac.growV or "UP")
+    w.x:refresh(); w.y:refresh()
+    w.durOn:refresh(); w.durSize:refresh(); w.durSize:show(ac.showDuration ~= false)
+    w.stackOn:refresh(); w.stackSize:refresh(); w.stackSize:show(ac.showStacks ~= false)
+    w.swipe:refresh(); w.border:refresh(); w.level:refresh()
+  end
+end
+
 local function BuildEditor(p)
   bodyContainer = CreateFrame("Frame", nil, p)
   bodyContainer:SetPoint("TOPLEFT", 0, 0); bodyContainer:SetPoint("TOPRIGHT", 0, 0)
@@ -546,15 +1210,8 @@ local function BuildEditor(p)
     sc.refresh = function() local cfg = Cfg(); if cfg then E.cond.sync(cfg.showCondition or "always") end end
   end)
 
-  E.textSec = makeSection("Center text", 106, function(b, sc)
-    E.textOn = toggleRow(b, -12, "Show health percent in the middle",
-      function() local c = Cfg(); return c and c.text.enabled end,
-      function(v) local c = Cfg(); if c then c.text.enabled = v; GU:ApplyLayout(selected) end end)
-    E.textSize = numRow(b, -40, "Text size", 8, 64,
-      function() local c = Cfg(); return c and c.text.size or 22 end,
-      function(v) local c = Cfg(); if c then c.text.size = v; GU:ApplyLayout(selected) end end)
-    sc.refresh = function() E.textOn:refresh(); E.textSize:refresh() end
-  end)
+  E.textsSec = makeSection("Texts", 300, function(b, sc) textsSection(b, sc) end)
+  E.aurasSec = makeSection("Auras", 300, function(b, sc) aurasSection(b, sc) end)
 
   -- The ring bodies keep their original y offsets (content from -42), so the
   -- body is anchored 30px up: the header row already provides that space.
@@ -567,7 +1224,7 @@ local function BuildEditor(p)
       sc.ring = sec
     end)
   end
-  E.healthSec   = ringBody("Health ring",         "health",   "health",   726)
+  E.healthSec   = ringBody("Health ring",         "health",   "health",   990)
   E.powerSec    = ringBody("Power ring",          "power",    "power",    756)
   E.resourceSec = ringBody("Class resource ring", "resource", "resource", 780)
   E.castSec     = ringBody("Cast ring",           "cast",     "cast",     900)

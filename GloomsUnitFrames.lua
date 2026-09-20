@@ -61,6 +61,14 @@ local ART = "Interface\\AddOns\\GloomsUnitFrames\\Media\\art\\"
 GU.RING_TEXTURES = {
     disc = { label = "Solid", path = ART .. "disc.png", ramp = ART .. "disc-ramp.png" },
 }
+-- The ramp at NARROWER fade widths (disc-ramp-10 … disc-ramp-90: the 0→1
+-- runs over that percent of the diameter, centred; the disc shape is baked
+-- in as always). The shield wash picks one so its fade fits the arc.
+local function RampAt(pct, fullRamp)
+    pct = math.max(10, math.min(100, math.floor(pct / 10 + 0.5) * 10))   -- (clamp is defined below)
+    if pct >= 100 then return fullRamp end
+    return ART .. "disc-ramp-" .. pct .. ".png"
+end
 -- The ROTATING mask, exact 180°, one per sweep direction: SOFT on its leading
 -- (moving) edge, HARD on its trailing edge — the trailing edge can end up
 -- inside the overlap zone over the other chunk (spans ≥ ~358°), where a soft
@@ -133,7 +141,16 @@ local function UnitDefaults(x, y)
         level = 10,
         showCondition = "always",  -- "always"|"combat"|"target"|"combat_or_target"
         rings = {
-            health = RingDefaults(),
+            -- classColor: a player's class colour / an NPC's reaction colour
+            -- stands in for `color` in SOLID mode (the shift layers still
+            -- apply on top). A gradient wins over it.
+            -- shieldTint: while the unit has an absorb, the fill takes
+            -- shieldColor at shieldAlpha (a gated copy of the arc — see Refresh).
+            health = RingDefaults({ classColor = true,
+                                    shieldTint = false, shieldColor = { 0.45, 0.85, 1.0 }, shieldAlpha = 0.8,
+                                    -- shieldAuto: the wash runs along the arc's chord, its fade as
+                                    -- wide as the chord; off = shieldAngle / shieldWidth by hand
+                                    shieldAuto = true, shieldAngle = 180, shieldWidth = 70 }),
             power  = RingDefaults({ clockwise = false, color = { 0.58, 0.42, 1.0 }, powerColor = true }),
             -- The cast ring shows only while the unit casts or channels. A
             -- channel DRAINS (its arc shrinks) when `channelDrains` is on.
@@ -150,7 +167,9 @@ local function UnitDefaults(x, y)
                                     midCastEnabled = true, midCastColor = { 0.32, 0.82, 0.36 },
                                     kickTick = true, kickTickColor = { 1, 1, 1 } }),
         },
-        text = { enabled = true, size = 22 },
+        -- texts: the list of text pieces (GloomsUnitFrames_Text.lua). Not a
+        -- default here on purpose: an empty list must STAY empty across
+        -- logins, so EnsureTexts seeds it only when the key is absent.
     }
 end
 
@@ -203,6 +222,32 @@ local function ApplyDefaults(tbl, defaults)
             ApplyDefaults(tbl[k], v)
         end
     end
+end
+
+-- Seed a unit's text list on first sight (and migrate the old single
+-- "center text"), then fill each piece's newer fields from TEXT_DEFAULTS.
+local function EnsureTexts(cfg)
+    if cfg.texts == nil then
+        local old = cfg.text
+        cfg.texts = { { template = "[hp:pct]", size = old and old.size or 22,
+                        enabled = not (old and old.enabled == false) } }
+    end
+    cfg.text = nil
+    for _, tc in ipairs(cfg.texts) do
+        ApplyDefaults(tc, GU.TEXT_DEFAULTS)
+        -- same-day migration: ring bands grew from 8 to 16 levels, so the old
+        -- text default (40, above everything) now sits under the cast ring
+        if tc.level == 40 and not tc.lv16 then tc.level = 70 end
+        tc.lv16 = true
+    end
+end
+
+-- Seed a unit's aura groups on first sight; fill newer fields from AURA_DEFAULTS.
+local function EnsureAuras(cfg, which)
+    if cfg.auras == nil then
+        cfg.auras = { { kind = (which == "target") and "mydebuffs" or "buffs", x = -110, y = 118 } }
+    end
+    for _, ac in ipairs(cfg.auras) do ApplyDefaults(ac, GU.AURA_DEFAULTS); GU:MigrateAuraGroup(ac) end
 end
 
 local function clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return hi end return v end
@@ -592,8 +637,11 @@ local function NewArc(holder, withLayers)
     -- the round ends when on; the ramp only in gradient mode; mid/low only
     -- when shifting.
     function arc:Apply()
+        -- rampOnly: the ramp layer alone, no base under it — a colour fading
+        -- to TRANSPARENT along the gradient angle (the shield wash).
         local function want(name)
-            return (name == "base") or (name == "grad" and self.gradient) or ((name == "mid" or name == "low") and self.shift)
+            return (name == "base" and not self.rampOnly) or (name == "grad" and self.gradient)
+                or ((name == "mid" or name == "low") and self.shift)
         end
         for k, ch in ipairs(self.chunks) do
             local on = self.shown and k <= self.n
@@ -768,6 +816,44 @@ local function PowerTypeColor(unit)
     return nil, pType
 end
 
+-- The health fill's colour when `classColor` is on: the unit's class for a
+-- player, the reaction colour for an NPC, grey when tapped. Any piece of this
+-- can be SECRET: the class token on an identity-restricted unit (EUI's
+-- reading of 12.1 — focus, ToT; Hub FINDINGS §17 says the target's identity
+-- goes secret in combat on a restricted map). A secret class token STILL
+-- colours the ring — `C_ClassColor.GetClassColor` accepts it and
+-- `SetVertexColor` accepts the secret channels it returns (§18's sink table).
+-- A secret DECISION (is it a player? which reaction?) cannot be branched on,
+-- so it reports "no" and the ring keeps its own colour. Returns ok, r, g, b —
+-- `ok` is a PLAIN boolean, the channels may be secret: never truth-test them,
+-- only pass them to a setter.
+local function secret(v) return issecretvalue and issecretvalue(v) end
+local function UnitColor(unit)
+    local isPlayer = UnitIsPlayer(unit)
+    if secret(isPlayer) then return false end
+    if isPlayer then
+        local _, class = UnitClass(unit)
+        local c
+        if secret(class) then
+            if C_ClassColor and C_ClassColor.GetClassColor then c = C_ClassColor.GetClassColor(class) end
+        elseif class then
+            c = (C_ClassColor and C_ClassColor.GetClassColor and C_ClassColor.GetClassColor(class)) or RAID_CLASS_COLORS[class]
+        end
+        if c then return true, c.r, c.g, c.b end
+        return false
+    end
+    local tapped = UnitIsTapDenied and UnitIsTapDenied(unit)
+    if not secret(tapped) and tapped then return true, 0.6, 0.6, 0.6 end
+    local reaction = UnitReaction(unit, "player")
+    if not secret(reaction) and reaction then
+        local c = FACTION_BAR_COLORS and FACTION_BAR_COLORS[reaction]
+        if c then return true, c.r, c.g, c.b end
+    end
+    return false
+end
+
+GU.UnitColor = UnitColor
+
 -- The player's class resource right now: power type, token, max points —
 -- or nil when the class has none / the spec or form gives 0.
 local function ClassResource()
@@ -779,6 +865,7 @@ local function ClassResource()
     if not max or max < 1 then return nil end
     return def.type, def.token, math.min(max, GU.MAX_SEGMENTS)
 end
+function GU:ClassResource() return ClassResource() end
 
 ------------------------------------------------------------------------
 -- Frames
@@ -805,12 +892,25 @@ local function CreateUnitFrame(which)
                 end
                 f.rings[key] = r
             else
-                f.rings[key] = { holder = h, track = NewArc(h, false), fill = NewArc(h, true) }
+                local r = { holder = h, track = NewArc(h, false), fill = NewArc(h, true) }
+                if key == "health" then
+                    -- The SHIELD TINT: a second copy of the fill arc in the shield
+                    -- colour, above the fill, behind two frames — `gate`, whose
+                    -- alpha is the absorb amount itself (see Refresh), and `inner`,
+                    -- whose plain alpha is the user's tint opacity.
+                    local gate = CreateFrame("Frame", nil, h); gate:SetAllPoints(h)
+                    local inner = CreateFrame("Frame", nil, gate); inner:SetAllPoints(gate)
+                    r.shield = { gate = gate, inner = inner, arc = NewArc(inner, true) }
+                    gate:Hide()
+                end
+                f.rings[key] = r
             end
         end
     end
-    f.text = f:CreateFontString(nil, "OVERLAY")
-    f.text:SetPoint("CENTER", 0, 0)
+    -- the QA probe's readout (Debug); the user's texts are pieces, see _Text.lua
+    f.debugText = f:CreateFontString(nil, "OVERLAY")
+    f.debugText:SetPoint("CENTER", 0, 0)
+    f.debugText:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
     frames[which] = f
 
     -- Anchor: an invisible frame the tab makes draggable; the ring follows it.
@@ -893,9 +993,10 @@ function GU:ApplyLayout(which)
     for i, key in ipairs(GU.RINGS) do
         local rc, r = cfg.rings[key], f.rings[key]
         if rc and r then   -- a unit may lack a ring (the target has no resource ring)
-        -- Each ring owns a band of 8 frame levels (its pieces use +1..+5), in
-        -- GU.RINGS order, so overlapping rings never interleave their pieces.
-        r.holder:SetFrameLevel(f:GetFrameLevel() + 1 + (i - 1) * 8)
+        -- Each ring owns a band of 16 frame levels, in GU.RINGS order, so
+        -- overlapping rings never interleave their pieces: track +0..+2, fill
+        -- +3..+6, the health ring's shield copy +11..+14, the kick tick +15.
+        r.holder:SetFrameLevel(f:GetFrameLevel() + 1 + (i - 1) * 16)
         local artDef = GU.RING_TEXTURES[rc.texture] or GU.RING_TEXTURES.disc
         local art, ramp = artDef.path, artDef.ramp or GU.RING_TEXTURES.disc.ramp
         r.holder:SetSize(rc.size, rc.size)
@@ -921,15 +1022,53 @@ function GU:ApplyLayout(which)
         else r.fill:SetSolid(rc.color) end
         r.fill:SetColor("mid", rc.midColor[1], rc.midColor[2], rc.midColor[3])
         r.fill:SetColor("low", rc.lowColor[1], rc.lowColor[2], rc.lowColor[3])
+        if r.shield then
+            local sh = r.shield
+            local on = rc.enabled and rc.shieldTint and true or false
+            sh.gate:SetFrameLevel(r.holder:GetFrameLevel() + 7)
+            sh.inner:SetFrameLevel(r.holder:GetFrameLevel() + 8)
+            sh.gate:SetShown(on)
+            if on then
+                -- A wash: the shield colour fading to transparent. Automatic:
+                -- along the arc's CHORD, from its start to its end, the fade as
+                -- wide as the chord (an arc's chord midpoint always projects onto
+                -- the centre along the chord, so a centred ramp lines up with any
+                -- arc). A full ring has no chord and takes the manual settings.
+                local sc = rc.shieldColor or { 0.45, 0.85, 1.0 }
+                local ang, wPct
+                if rc.shieldAuto ~= false and (rc.span or 180) < 360 then
+                    local S = math.rad(rc.start or 0)
+                    local E = S + (rc.clockwise and -1 or 1) * math.rad(rc.span or 180)
+                    ang = math.deg(math.atan2(math.sin(S) - math.sin(E), math.cos(S) - math.cos(E)))
+                    wPct = math.sin(math.rad(rc.span or 180) / 2) * 100
+                else
+                    ang, wPct = rc.shieldAngle or 180, rc.shieldWidth or 70
+                end
+                local g2 = {}
+                for k, val in pairs(g) do g2[k] = val end
+                g2.ramp = RampAt(wPct, ramp)
+                sh.arc.rampOnly = true
+                sh.arc:SetShown(true)
+                sh.arc:SetShift(false)
+                sh.arc:Configure(g2)
+                sh.arc:SetGradient(sc, sc, ang)
+                sh.inner:SetAlpha(rc.shieldAlpha or 0.8)
+                sh.gate:SetAlpha(0)
+            end
+        end
         end
         end
     end
 
-    local sk = EnsureSkin()
-    local font = sk and sk.FONT and sk.FONT.head or "Fonts\\FRIZQT__.TTF"
-    f.text:SetFont(font, cfg.text.size or 22, "")
-    f.text:SetTextColor(1, 1, 1)
-    f.text:SetShown(cfg.text.enabled)
+    EnsureTexts(cfg)
+    self:LayoutTexts(f, cfg)
+    EnsureAuras(cfg, which)
+    -- Fenced: an aura-engine failure must never cost the rings or the other unit.
+    local okA, errA = pcall(self.LayoutAuras, self, f, cfg, which)
+    if not okA then
+        GU.aurasError = errA
+        if not GU.aurasErrorSaid then GU.aurasErrorSaid = true; Chat("aura groups failed to build: " .. tostring(errA)) end
+    end
 
     self:Refresh(which)
     UpdateVisibility()
@@ -1000,14 +1139,33 @@ function GU:Refresh(which)
         for _, key in ipairs(GU.RINGS) do
             local r = f.rings[key]
             if r and r.fill then r.fill:SetFromPlain(0) end
+            if r and r.shield then r.shield.arc:SetFromPlain(0); r.shield.gate:SetAlpha(0) end
         end
-        f.text:SetText("")
+        self:RefreshTexts(f, unit)
         return
     end
 
-    -- Health ring: colours are static; only the geometry moves.
+    -- Health ring. In solid mode with classColor on, the colour follows the
+    -- unit (a target changes; a neutral turns hostile). A gradient WINS over
+    -- the class colour — the owner's call, the two are exclusive — and the
+    -- layout has already set it.
     local rc, r = cfg.rings.health, f.rings.health
-    if rc.enabled then r.fill:SetFromUnit(unit) end
+    if rc.enabled then
+        if rc.classColor and rc.colorMode ~= "gradient" then
+            local ok, cr, cg, cb = UnitColor(unit)
+            r.fill:SetSolid(ok and { cr, cg, cb } or rc.color)
+        end
+        r.fill:SetFromUnit(unit)
+        if rc.shieldTint and r.shield then
+            -- The presence gate (measured 2026-09-19, /gu gate): a secret
+            -- alpha of ZERO is ignored, so the frame is set to a PLAIN zero
+            -- first and then to the absorb amount — shown iff shielded, and
+            -- no number ever reaches Lua.
+            r.shield.arc:SetFromUnit(unit)
+            r.shield.gate:SetAlpha(0)
+            r.shield.gate:SetAlpha(UnitGetTotalAbsorbs(unit) or 0)
+        end
+    end
 
     -- Power ring. A unit with no power type (a training dummy) reads 0.
     rc, r = cfg.rings.power, f.rings.power
@@ -1032,9 +1190,7 @@ function GU:Refresh(which)
         end
     end
 
-    if cfg.text.enabled then
-        f.text:SetFormattedText("%d", UnitHealthPercent(unit, true, CurveConstants.ScaleTo100))
-    end
+    self:RefreshTexts(f, unit)
     self:RefreshCast(which)
 end
 
@@ -1125,7 +1281,7 @@ local function EnsureTick(r)
     if r.tick then return r.tick end
     local fr = CreateFrame("Frame", nil, r.holder)
     fr:SetAllPoints(r.holder)
-    fr:SetFrameLevel(r.holder:GetFrameLevel() + 7)
+    fr:SetFrameLevel(r.holder:GetFrameLevel() + 15)
     local t = fr:CreateTexture(nil, "OVERLAY")
     t:SetTexture("Interface\\Buttons\\WHITE8x8")
     r.tick, r.tickFrame = t, fr
@@ -1196,10 +1352,20 @@ local function KickExtras(r, rc, st)
     end
 end
 
+-- The unit's current cast state as the ring sees it (the text pieces read it).
+function GU:CastInfo(which)
+    local f = frames[which]
+    local r = f and f.rings.cast
+    local st = r and r.cast
+    if st and st.fake then return nil end
+    return st
+end
+
 local function CastTick(holder)
     local which, r, rc = holder.unit, holder.ring, holder.cfg
     local st = r.cast
     if not st then return end
+    GU:RefreshTexts(frames[which], which, "cast")
     local p
     if st.plain then
         local now = GetTime() * 1000
@@ -1257,7 +1423,7 @@ function GU:RefreshCast(which)
     r.holder.unit, r.holder.ring, r.holder.cfg = which, r, rc
     r.holder:SetScript("OnUpdate", r.casting and CastTick or nil)
     if not (r.casting and which == "target" and rc.kickAware and not st.fake) then HideKickExtras(r) end
-    if r.casting then CastTick(r.holder) else r.fill:SetFromPlain(0) end
+    if r.casting then CastTick(r.holder) else r.fill:SetFromPlain(0); GU:RefreshTexts(f, which, "cast") end
 end
 
 ------------------------------------------------------------------------
@@ -1357,6 +1523,16 @@ ev:RegisterUnitEvent("UNIT_MAXHEALTH", "player", "target")
 ev:RegisterUnitEvent("UNIT_POWER_UPDATE", "player", "target")
 ev:RegisterUnitEvent("UNIT_MAXPOWER", "player", "target")
 ev:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player", "target")
+ev:RegisterUnitEvent("UNIT_FACTION", "player", "target")   -- reaction / tap changes
+-- events that move only the text pieces
+for _, e in ipairs({ "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_CLASSIFICATION_CHANGED", "UNIT_ABSORB_AMOUNT_CHANGED",
+                     "UNIT_HEAL_PREDICTION", "UNIT_FLAGS", "UNIT_CONNECTION", "UNIT_THREAT_SITUATION_UPDATE" }) do
+    ev:RegisterUnitEvent(e, "player", "target")
+end
+for _, e in ipairs({ "PLAYER_FLAGS_CHANGED", "PLAYER_UPDATE_RESTING", "RAID_TARGET_UPDATE", "PARTY_LEADER_CHANGED",
+                     "GROUP_ROSTER_UPDATE", "UNIT_THREAT_LIST_UPDATE" }) do
+    ev:RegisterEvent(e)
+end
 ev:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 ev:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
 ev:RegisterEvent("SPELLS_CHANGED")
@@ -1385,13 +1561,14 @@ ev:SetScript("OnEvent", function(_, event, unit)
                 end
             end
         end
-        for _, which in ipairs(GU.UNITS) do CreateUnitFrame(which) end
+        for _, which in ipairs(GU.UNITS) do EnsureTexts(db[which]); EnsureAuras(db[which], which); CreateUnitFrame(which) end
         initialised = true
         RefreshKick()
         for _, which in ipairs(GU.UNITS) do GU:ApplyLayout(which) end
     elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_TARGET_CHANGED"
         or event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
         UpdateVisibility()
+        if event == "PLAYER_TARGET_CHANGED" then GU:RefreshAuras(frames.target) end
     elseif event == "SPELLS_CHANGED" or (event == "UNIT_PET" and unit == "player") then
         RefreshKick()
     elseif event == "UNIT_MAXPOWER" and unit == "player" or event == "PLAYER_SPECIALIZATION_CHANGED"
@@ -1400,6 +1577,13 @@ ev:SetScript("OnEvent", function(_, event, unit)
         GU:ApplyLayout("player")   -- the segment count may have changed
     elseif event:find("^UNIT_SPELLCAST") and (unit == "player" or unit == "target") then
         GU:RefreshCast(unit)
+    elseif event == "PLAYER_FLAGS_CHANGED" or event == "PLAYER_UPDATE_RESTING" or event == "RAID_TARGET_UPDATE"
+        or event == "PARTY_LEADER_CHANGED" or event == "GROUP_ROSTER_UPDATE" or event == "UNIT_THREAT_LIST_UPDATE" then
+        if initialised then
+            for _, which in ipairs(GU.UNITS) do
+                if frames[which]:IsShown() then GU:RefreshTexts(frames[which], which) end
+            end
+        end
     elseif unit == "player" or unit == "target" then
         GU:Refresh(unit)
     end
@@ -1435,11 +1619,11 @@ local function Debug(which)
             -- A secret renders as TEXT: show the raw percent, the gate curve's
             -- answer and UnitPower itself in the ring's centre for a few seconds.
             local gate = r.fill.chunks[1].alphaCurve.base
-            f.text:SetFormattedText("pct %.2f  gate %.2f  pow %d  max %d",
+            f.debugText:SetFormattedText("pct %.2f  gate %.2f  pow %d  max %d",
                 UnitPowerPercent(which, pType or 0, true, CurveConstants.ScaleTo100),
                 UnitPowerPercent(which, pType or 0, true, gate),
                 UnitPower(which, pType or 0), max)
-            C_Timer.After(8, function() GU:Refresh(which) end)
+            C_Timer.After(8, function() f.debugText:SetText("") end)
         end
         for k, ch in ipairs(r.fill.chunks) do
             print(("   chunk %d  fixed rot=%s  rot rot=%s"):format(k, v(ch.fixed:GetRotation()), v(ch.rot:GetRotation())))
@@ -1453,10 +1637,138 @@ local function Debug(which)
     end
 end
 
+-- QA probe for the absorb arc (2026-09-19): does a curve object evaluate a
+-- secret itself, and does UnitHealthPercent's second argument include
+-- absorbs? Prints to chat and renders the two percents in the player ring.
+local function ProbeAbsorb()
+    local function v(x)
+        if x == nil then return "nil" end
+        if issecretvalue and issecretvalue(x) then return "SECRET" end
+        return tostring(x)
+    end
+    local c = C_CurveUtil.CreateCurve()
+    c:AddPoint(0, 0); c:AddPoint(1, 1)
+    local mt = getmetatable(c)
+    Chat("curve object: type=" .. type(c) .. " metatable=" .. tostring(mt ~= nil)
+        .. " __index=" .. (mt and type(mt.__index) or "-"))
+    if mt and type(mt.__index) == "table" then
+        local names = {}
+        for k in pairs(mt.__index) do names[#names + 1] = tostring(k) end
+        table.sort(names)
+        print("   methods: " .. table.concat(names, ", "))
+    end
+    for _, name in ipairs({ "Evaluate", "EvaluateAt", "GetValue", "GetValueAt", "Sample" }) do
+        if type(c[name]) == "function" then
+            local ok, r = pcall(c[name], c, 0.5)
+            print(("   c:%s(0.5) -> ok=%s value=%s"):format(name, tostring(ok), v(r)))
+            local ok2, r2 = pcall(c[name], c, UnitGetTotalAbsorbs("player"))
+            print(("   c:%s(secret absorb) -> ok=%s value=%s"):format(name, tostring(ok2), v(r2)))
+        end
+    end
+    local abs = UnitGetTotalAbsorbs("player")
+    Chat("absorbs(player)=" .. v(abs) .. "  maxhp(player)=" .. v(UnitHealthMax("player")))
+    -- Rendered on screen, top centre, big: a secret can be READ that way.
+    if not GU.probeText then
+        local pf = CreateFrame("Frame", nil, UIParent)
+        pf:SetFrameStrata("TOOLTIP"); pf:SetSize(10, 10); pf:SetPoint("TOP", 0, -120)
+        GU.probeText = pf:CreateFontString(nil, "OVERLAY")
+        GU.probeText:SetFont("Fonts\\FRIZQT__.TTF", 28, "THICKOUTLINE")
+        GU.probeText:SetPoint("TOP"); GU.probeText:SetTextColor(1, 0.9, 0.2)
+    end
+    GU.probeText:SetFormattedText("with %d  /  without %d     absorb %s",
+        UnitHealthPercent("player", true, CurveConstants.ScaleTo100),
+        UnitHealthPercent("player", false, CurveConstants.ScaleTo100),
+        AbbreviateNumbers(abs or 0))
+    C_Timer.After(20, function() GU.probeText:SetText("") end)
+    Chat("rendered at the TOP of the screen for 20s: the percent WITH the flag / WITHOUT it / your absorb")
+end
+
+-- QA probe 2 (2026-09-19): the presence gate for an absorb tint. A secret
+-- alpha of ZERO is ignored (§18), so: set PLAIN 0 first, then the secret
+-- amount — visible iff the amount is non-zero. Three squares, top of screen:
+--   A  a FRAME's alpha gated by the absorb        (expect: shown iff shielded)
+--   B  a TEXTURE's alpha gated by the absorb      (expect: shown iff shielded)
+--   C  a frame gated by a secret that IS zero     (expect: never shown)
+local function ProbeGate()
+    if not GU.gateProbe then
+        local holder = CreateFrame("Frame", nil, UIParent)
+        holder:SetFrameStrata("TOOLTIP"); holder:SetSize(300, 80); holder:SetPoint("TOP", 0, -170)
+        local function square(i, label)
+            local fr = CreateFrame("Frame", nil, holder)
+            fr:SetSize(60, 60); fr:SetPoint("LEFT", (i - 1) * 100, 0)
+            local t = fr:CreateTexture(nil, "ARTWORK"); t:SetAllPoints(); t:SetColorTexture(1, 0.85, 0.2, 1)
+            local l = holder:CreateFontString(nil, "OVERLAY"); l:SetFont("Fonts\\FRIZQT__.TTF", 16, "THICKOUTLINE")
+            l:SetPoint("TOP", fr, "BOTTOM", 0, -2); l:SetText(label)
+            return fr, t
+        end
+        GU.gateProbe = { holder = holder }
+        GU.gateProbe.A = square(1, "A frame")
+        GU.gateProbe.B, GU.gateProbe.Bt = square(2, "B texture")
+        GU.gateProbe.C = square(3, "C zero")
+    end
+    local g = GU.gateProbe
+    local abs = UnitGetTotalAbsorbs("player") or 0
+    local zero = UnitGetTotalHealAbsorbs("player") or 0    -- normally 0; secret or not
+    g.holder:Show()
+    g.A:SetAlpha(0);  g.A:SetAlpha(abs)
+    g.Bt:SetAlpha(0); g.Bt:SetAlpha(abs)
+    g.C:SetAlpha(0);  g.C:SetAlpha(zero)
+    local function v(x) if issecretvalue and issecretvalue(x) then return "SECRET" end return tostring(x) end
+    Chat(("gate probe: absorb=%s healabsorb=%s — squares A and B should be visible only while you have a shield; C never."):format(v(abs), v(zero)))
+    Chat("run /gu gate again after the shield fades (or /gu gate off to remove the squares)")
+end
+
 SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
     if not initialised then Chat("Still loading, please wait.") return end
     msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     if msg == "debug" then Debug("player") return end
     if msg == "debug target" then Debug("target") return end
+    if msg == "probe" then ProbeAbsorb() return end
+    if msg == "auras" then
+        Chat(("auras: blizzard container addon loaded=%s  createFailed=%s  layoutError=%s  decorateError=%s"):format(
+            tostring(C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer")), tostring(GU.aurasFailed or 0), tostring(GU.aurasError), tostring(GU.decorateError)))
+        Chat(("effects: host OnShow fired %d time(s), Start called %d time(s), last error=%s"):format(
+            GU.hostShows or 0, GU.fxStarts or 0, tostring(GU.fxError)))
+        for _, which in ipairs(GU.UNITS) do
+            local f = frames[which]
+            local cfgN, liveN = #(db[which].auras or {}), 0
+            for _ in pairs(f.auras or {}) do liveN = liveN + 1 end
+            Chat(("%s: %d group(s) configured, %d recorded on the frame, frame shown=%s"):format(which, cfgN, liveN, tostring(f:IsShown())))
+            for i = 1, cfgN do
+                local g = f.auras and f.auras[i]
+                local ok, err = pcall(function()
+                if g then
+                    local c = g.container
+                    -- ⚠ IsShown on the engine's buttons is a SECRET boolean; count only
+                    local n, shown = c:GetNumChildren(), -1
+                    local w, h = c:GetSize()
+                    local px, py = c:GetCenter()
+                    Chat(("%s group %d: kind=%s holder shown=%s container shown=%s visible=%s size=%.0fx%.0f centre=%s,%s children=%d shown=%d unit=%s"):format(
+                        which, i, tostring(db[which].auras[i].kind), tostring(g.holder:IsShown()), tostring(c:IsShown()),
+                        tostring(c:IsVisible()), w, h, px and ("%.0f"):format(px) or "?", py and ("%.0f"):format(py) or "?",
+                        n, shown, tostring(c.GetUnit and c:GetUnit())))
+                else
+                    Chat(which .. " group " .. i .. ": NOT BUILT")
+                end
+                end)
+                if not ok then Chat(which .. " group " .. i .. ": diagnostic error " .. tostring(err)) end
+            end
+        end
+        return
+    end
+    if msg == "gate" then ProbeGate() return end
+    if msg == "gate off" then if GU.gateProbe then GU.gateProbe.holder:Hide() end return end
+    -- QA: /gu text <template> · /gu text target <template> — sets the FIRST
+    -- text piece's template (the tab is the real editor).
+    local which, tpl = msg:match("^text%s+(target)%s+(.+)$")
+    if not which then tpl = msg:match("^text%s+(.+)$"); which = "player" end
+    if tpl then
+        local cfg = db[which]; EnsureTexts(cfg)
+        cfg.texts[1] = cfg.texts[1] or {}
+        cfg.texts[1].template = tpl
+        GU:ApplyLayout(which)
+        Chat(which .. " text 1 = " .. tpl)
+        return
+    end
     GloomsHub:ToggleWindow("unitframes")
 end
