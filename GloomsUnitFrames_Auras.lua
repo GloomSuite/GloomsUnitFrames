@@ -47,9 +47,22 @@ GU.AURA_DEFAULTS = {
     showStacks   = true, stackSize = 11,
     swipe     = true,         -- the engine's cooldown swipe over the icon
     border    = true,         -- 1px dark edge
-    level     = 60,           -- frame level above the unit frame (rings 1–64)
+    -- LAYER (the redesign's Layer Override plate, 2026-09-21): off = the unit's
+    -- strata, 60 above the unit frame (rings 1–64); on = `strata` + `level`, own.
+    ownLayer  = nil,          -- nil on an old group: on iff its level was changed from 60
+    strata    = nil,
+    level     = 60,
     shape     = nil,          -- a GloomsHub.SHAPES key, worn by every icon in the group
+    name      = nil,          -- the row's name in the tab; nil = the kind's label
 }
+function GU:AuraOwnLayer(ac)
+    if ac.ownLayer ~= nil then return ac.ownLayer end
+    return ac.level ~= nil and ac.level ~= 60
+end
+local function AuraLevel(ac, f)
+    if GU:AuraOwnLayer(ac) then return ac.level or 60 end
+    return f:GetFrameLevel() + 60
+end
 
 -- Two kinds: Buffs / Debuffs are engine GROUPS narrowed by `filter`.
 -- ⚠ There was a third, "This spell" — ONE aura by spell ID wearing a Hub effect —
@@ -120,14 +133,10 @@ function GU:AuraFilter(ac)
     if inc then cand.includeDispelTypes = inc end
     if exc then cand.excludeDispelTypes = exc end
     if flt.timed then cand.maxDuration = math.huge end
-    if flt.only and #flt.only > 0 then
-        local set = {}; for _, id in ipairs(flt.only) do set[id] = true end
-        cand.includeSpellIDs = set
-    end
-    if flt.never and #flt.never > 0 then
-        local set = {}; for _, id in ipairs(flt.never) do set[id] = true end
-        cand.excludeSpellIDs = set
-    end
+    -- ⚠ The spell-ID lists (`flt.only` / `flt.never` → includeSpellIDs /
+    -- excludeSpellIDs) were REMOVED by the owner 2026-09-21: the engine ignores
+    -- them on the player's debuffs (Hub FINDINGS §20.6) and "three of four
+    -- cases isn't good enough, and is just confusing." A saved list is ignored.
     return str, (next(cand) ~= nil) and cand or nil
 end
 
@@ -353,7 +362,8 @@ end
 
 local function LayoutLive(g, ac, f)
     local c, holder = g.container, g.holder
-    holder:SetFrameLevel(f:GetFrameLevel() + (ac.level or 60))
+    holder:SetFrameStrata((GU:AuraOwnLayer(ac) and ac.strata) or f:GetFrameStrata())
+    holder:SetFrameLevel(AuraLevel(ac, f))
     holder:SetShown(ac.enabled ~= false)
     local anchor = AnchorFor(ac.growH, ac.growV)
     c:ClearAllPoints()
@@ -451,7 +461,8 @@ local function LayoutAuraPreview(f, cfg, unit)
         pv.icons = {}
         f.auraPreview = pv
     end
-    pv:SetFrameLevel(f:GetFrameLevel() + (ac.level or 60) + 1)
+    pv:SetFrameStrata((GU:AuraOwnLayer(ac) and ac.strata) or f:GetFrameStrata())
+    pv:SetFrameLevel(AuraLevel(ac, f) + 1)
     local iw, ih = IconRect(ac)
     local gap = ac.spacing or 3
     local perLine = math.max(1, ac.perLine or 8)

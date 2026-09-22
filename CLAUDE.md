@@ -125,7 +125,10 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   rendered by a single `SetFormattedText` whose arguments may be secret (`AbbreviateNumbers` for
   845K). Readers never branch on a secret. `GU.TEXT_HELP` is the list the tab prints — keep it next
   to `TAGS`. Pieces are child frames (own level) with a FontString; `LayoutTexts` from ApplyLayout,
-  `RefreshTexts(f, unit[, group])` from Refresh / the cast tick.
+  `RefreshTexts(f, unit[, group])` from Refresh / the cast tick. A piece with no `font` draws in
+  the UNIT's default (`cfg.font`, stage 2), else Khand. LAYER (stage 2): `ownLayer` / `strata` /
+  `level` — off = the unit's strata, 70 above the unit frame; on = its own two numbers
+  (`GU:TextOwnLayer(tc)`; an old piece is "on" iff its level ≠ 70).
 - **`GloomsUnitFrames_Auras.lua` — the AURA GROUPS.** `cfg.auras` is a list; TWO kinds, `buffs` /
   `debuffs` (an `AuraContainer` GROUP, `AddAuraGroup` with the engine flow layout, narrowed by
   `ac.filter` → `GU:AuraFilter` builds the token string + `candidateFilters`; `GU.AURA_CLASSES` is
@@ -140,31 +143,45 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   mid-fight is forbidden from the start and `AddMaskTexture` throws (§20.7). A changed filter /
   size / shape swaps in a fresh container (`Signature`); max count and position adjust the live
   one (`LayoutLive`). Legacy kinds (`mydebuffs`…) migrate to filters in `MigrateAuraGroup`.
+  ★ **The spell-ID lists (`filter.only` / `filter.never`) were REMOVED by the owner 2026-09-21** —
+  `GU:AuraFilter` ignores a saved list; only the class tri-states and `timed` remain. LAYER
+  (stage 2): `ownLayer` / `strata` / `level` like a text piece (`GU:AuraOwnLayer`, default 60);
+  `name` is the tab's row label (cosmetic).
   **The PREVIEW** (`LayoutAuraPreview`, `GU:SetAuraPreview`): sample icons from the spellbook drawn
   by our own textures where the selected group's buttons will be, by the same rules the engine's
   flow layout is given, while the tab's Auras section is open — the engine only draws buttons for
   auras you have, so an empty group was invisible while being placed. Its pixel alignment against
   a live group is unverified (BACKLOG 12.3).
 - **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
-  built on `LibGloomSkin` — `SKIN_NEEDS = 11`; bump in the same commit as any newer call).
-  ★ **MID-REDESIGN (Hub BACKLOG 16).** Stage 1 (2026-09-21) put the kit's shell around it: the
-  PROFILE row is in the Suite window's FOOTER (`RegisterTab`'s `profile = PROFILE_API`, the same
-  api that used to feed the rail's block, with `users` for the delete gate), the banner says
-  gloomUNIT (`wordmark = "UNIT"`), Player / Target are the two Michroma buttons at the top
-  (`BuildTop`) with **Copy from the other unit** and **Reset** at the row's right end (the
-  assistant's placement — the mocks don't show them), the accordion's headers are
-  `UI.sectionHeader` (26px pitch, body 20 under, 28 after), and the **GLOBAL** section (Visibility
-  picker · X / Y scrub dials with the centre mark · Layer picker · Level dial, at the mock's own
-  coordinates x=50/380/634) replaced Position · Layer · Visibility. The left rail is GONE.
-  **Still pre-kit, until stage 2 rebuilds each from its mock:** Texts (list + editor, the shortcode
-  popover) · Auras (list + editor, filters behind a cog) · one section per ring (the resource
-  section only for Player), every body a `UI.grid` with `cNum` / `cToggle` / `cColor` / `cChoice` /
-  `cDropdown` cells and cogs for the deep clusters — drawn through the Hub's transition theme. A
-  section's `refresh` ends with `sc.height = …` so the accordion follows. Everything applies live;
-  there is no Save. **The tab is the lock**: `SetEditing(which)` on the container's OnShow makes
-  the selected unit draggable with a green outline; OnHide locks. While the Cast ring section is
-  open, that unit's ring runs a fake 5s cast on repeat (`SetCastPreview`). The mock's "Unit Frame
-  Default Font" is NOT built — the engine has no per-unit default font yet (stage 2, first item).
+  built on `LibGloomSkin` — `SKIN_NEEDS = 12`; bump in the same commit as any newer call).
+  ★ **ON THE KIT since redesign stage 2 (2026-09-21, Hub BACKLOG 16 — the design decisions live
+  THERE).** The PROFILE row is in the Suite window's FOOTER (`RegisterTab`'s `profile =
+  PROFILE_API`), the banner says gloomUNIT, Player / Target are the two Michroma buttons at the top
+  (`BuildTop`) with Copy-from / Reset at the row's right. Every section is built from its Figma
+  mock at the mock's own body-relative x/y (never a grid): **Global** (`kitPick`s + dials: Visibility
+  incl. **Never** — the frame hides and every other header dims — the unit's **default text font**
+  `cfg.font`, X / Y, Layer, Level) · the four rings through ONE `kitRingSection(b, sc, key, title,
+  kind)`: every widget is built once and `place`d by the live face in `sc.refresh` — the BAR face
+  from the Health mock, the ARC face from the Power mock — with the ring's extras (Health: absorb
+  overlay / shield tint + fade; Resource: gap, points-run, breakpoint; Cast: Channels Drain, Color
+  by Interrupt State and the five interrupt-colour chips with descriptions) and the Layer Override
+  plate (OFF|ON · Layer · Level field); the fill colour is a `UI.chip` whose picker offers the unit's
+  colour SOURCE ("Use Class / Power / Resource Color" → `classColor / powerColor / resourceColor`);
+  `GU.PowerTypeColor` / `GU:ResourceColor()` feed the swatch preview · **Texts** (`textsSection`:
+  "Text N" rows with the TEMPLATE inline in a white field, EDIT / EDITING, ADD TEXT · DUPLICATE ·
+  DELETE (confirmed), the SHORTCODE list on the panel — every `[code]` its own link — and the
+  editor with "(Text N)" labels, the Font Color chip carrying the class source, the Layer plate) ·
+  **Auras** (`aurasSection`: "Group N" rows with a NAME field (`ac.name`, cosmetic), BUFFS | DEBUFFS,
+  Icon Shape, dials, the two Grow Direction bars, Display Order, the **Filters** button opening the
+  kit popover with the class tri-states + Only Timed — **the spell-ID lists are gone**, the owner
+  2026-09-21 — and the Layer plate; the mock has no "dark edge" control, the saved value applies).
+  Disabled-by-another-setting = 50%, never hidden; hidden only for the other mode's face. A
+  section's `refresh` ends with `sc.height = …` so the accordion follows; collapsing the open
+  section scrolls to the top. Everything applies live; there is no Save. **The tab is the lock**:
+  `SetEditing(which)` on the container's OnShow makes the selected unit draggable with a green
+  outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a fake 5s cast
+  on repeat (`SetCastPreview`). The old pre-kit `ringSection` / `listBlock` are deleted; the
+  `UI.grid` cell helpers (`cNum` … `cNote`) remain only for the filter popover's Only Timed row.
 - **`Media/art/`** is GENERATED (Python/PIL; the arc scripts were throwaway — regenerate from the
   descriptions in FINDINGS §18 / the engine header; the bar's `ramp.png` / `ramp-v.png` / `hatch.png`
   are one-liners described in the engine's BAR section): `disc.png` (the default ring art, radius

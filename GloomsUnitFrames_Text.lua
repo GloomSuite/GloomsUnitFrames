@@ -32,7 +32,7 @@ end
 GU.TEXT_DEFAULTS = {
     enabled    = true,
     template   = "[hp:pct]",
-    font       = nil,          -- an LSM font NAME; nil = the suite's title font
+    font       = nil,          -- an LSM font NAME; nil = the unit's default font (cfg.font), else Khand
     size       = 22,
     outline    = "none",       -- "none" | "thin" | "thick"
     shadow     = true,
@@ -41,8 +41,17 @@ GU.TEXT_DEFAULTS = {
     x = 0, y = 0,
     justify    = "CENTER",     -- "LEFT" | "CENTER" | "RIGHT" — also the anchor side
     maxWidth   = 0,            -- >0: clip with … past this width
-    level      = 70,           -- frame level above the unit frame; rings use 1–64
+    -- LAYER (the redesign's Layer Override plate, 2026-09-21): off = the unit's
+    -- strata, level 70 above the unit frame (rings use 1–64); on = `strata`
+    -- (nil = the unit's) and `level`, this piece's own.
+    ownLayer   = nil,          -- nil on an old piece: on iff its level was changed from 70
+    strata     = nil,
+    level      = 70,
 }
+function GU:TextOwnLayer(tc)
+    if tc.ownLayer ~= nil then return tc.ownLayer end
+    return tc.level ~= nil and tc.level ~= 70
+end
 
 ------------------------------------------------------------------------
 -- Number formatting. AbbreviateNumbers(v[, cfg]) is Blizzard's, engine-side,
@@ -370,9 +379,12 @@ function GU:LayoutTexts(f, cfg)
         local p = f.texts[i] or NewPiece(f)
         f.texts[i] = p
         p.cfg = tc
-        p.frame:SetFrameLevel(f:GetFrameLevel() + (tc.level or 40))
+        local own = GU:TextOwnLayer(tc)
+        p.frame:SetFrameStrata((own and tc.strata) or f:GetFrameStrata())
+        p.frame:SetFrameLevel(own and (tc.level or 70) or (f:GetFrameLevel() + 70))
         local fs = p.fs
-        fs:SetFont(FontPath(tc.font), tc.size or 22, OUTLINE[tc.outline or "none"] or "")
+        -- A piece's own font, else the unit's default (stage 2 of the redesign, 2026-09-21).
+        fs:SetFont(FontPath((tc.font and tc.font ~= "") and tc.font or cfg.font), tc.size or 22, OUTLINE[tc.outline or "none"] or "")
         if tc.shadow then fs:SetShadowOffset(1, -1); fs:SetShadowColor(0, 0, 0, 0.8)
         else fs:SetShadowOffset(0, 0) end
         local just = tc.justify or "CENTER"

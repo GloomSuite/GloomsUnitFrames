@@ -175,7 +175,9 @@ local function UnitDefaults(x, y)
         x = x, y = y,
         strata = "MEDIUM",
         level = 10,
-        showCondition = "always",  -- "always"|"combat"|"target"|"combat_or_target"
+        showCondition = "always",  -- "always"|"combat"|"target"|"combat_or_target"|"never"
+        font = nil,                -- the unit's DEFAULT text font (an LSM name); a text
+                                   -- piece with no font of its own uses it; nil = Khand
         rings = {
             -- classColor: a player's class colour / an NPC's reaction colour
             -- stands in for `color` in SOLID mode (the shift layers still
@@ -1271,6 +1273,8 @@ local function UnitColor(unit)
 end
 
 GU.UnitColor = UnitColor
+GU.PowerTypeColor = PowerTypeColor   -- the tab's colour chip previews the source with it
+
 
 -- The player's class resource right now: power type, token, max points —
 -- or nil when the class has none / the spec or form gives 0.
@@ -1284,6 +1288,17 @@ local function ClassResource()
     return def.type, def.token, math.min(max, GU.MAX_SEGMENTS)
 end
 function GU:ClassResource() return ClassResource() end
+-- The player's class-resource colour as the tab previews it: the same rule
+-- Refresh applies (a DK's runes are the class red, not PowerBarColor.RUNES).
+function GU:ResourceColor()
+    local _, token = ClassResource()
+    if token == "RUNES" then
+        local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS.DEATHKNIGHT
+        if c then return c.r, c.g, c.b end
+    elseif token and PowerBarColor[token] then
+        local c = PowerBarColor[token]; return c.r, c.g, c.b
+    end
+end
 
 ------------------------------------------------------------------------
 -- Frames
@@ -2053,6 +2068,7 @@ UpdateVisibility = function()
         if cond == "combat" then show = inCombat
         elseif cond == "target" then show = hasTarget
         elseif cond == "combat_or_target" then show = inCombat or hasTarget
+        elseif cond == "never" then show = false   -- hidden, full stop — even while the tab is editing it (the owner, 2026-09-21)
         else show = true end
         if which == "target" and not hasTarget and editing ~= "target" then show = false end
         f:SetShown(show)
