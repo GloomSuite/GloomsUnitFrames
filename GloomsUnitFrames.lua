@@ -116,6 +116,40 @@ local function RingDefaults(over)
         trackAlpha = 0.12,
         roundStart = false,           -- a round cap on the arc's start
         roundEnd   = false,           -- a round cap riding the leading edge
+        -- MODE (2026-09-21): "arc" is everything above; "bar" is a straight
+        -- StatusBar masked to a silhouette from the Hub's shape catalog — the
+        -- engine sizes the fill from the secret itself (no curves, no chunks)
+        -- and a real absorb overlay is possible. The colour settings above
+        -- serve both modes; `bar` holds only what a bar adds.
+        mode = "arc",
+        -- LAYERING per display (2026-09-21): nil = the unit's strata / the
+        -- automatic band (16 levels per ring in GU.RINGS order). Set, they
+        -- are absolute, so a display can sit between two Overlays graphics —
+        -- the same two numbers Gloom's Overlays gives each of its own.
+        strata = nil, level = nil,
+        -- OUTLINE, in either mode (the owner, 2026-09-21: it is a property of
+        -- the display, not of the bar). A bar wears the shape's rim art at
+        -- one of three widths (thin / medium / thick, three files per shape;
+        -- a rectangle draws four edges); an arc draws a slightly larger arc
+        -- in the outline colour under its track — outer edge, inner edge and
+        -- both ends — following the geometry, never the value.
+        outline = false, outlineWidth = "medium",
+        outlineColor = { 0.58, 0.42, 1.0 }, outlineAlpha = 1,
+        bar = {
+            shape    = "orb",         -- a key of the Hub's BAR-shape family, or "rect" for a free rectangle
+            size     = 120,           -- the silhouette's SHORT side, px; the long side follows its aspect
+            width    = 200, height = 24,   -- "rect" only
+            rotation = 0,             -- degrees, counter-clockwise; the fill stays screen-axis
+            flipH    = false, flipV = false,
+            fillDir  = "up",          -- "up" | "down" | "left" | "right"
+            -- the absorb, EUI-style: from the FULL end back over the fill,
+            -- present at full health too
+            absorb   = true, absorbColor = { 1, 1, 1 }, absorbAlpha = 0.6,
+            -- the bar's OWN offset from the unit's centre — the owner, 2026-09-21:
+            -- an arc and a bar never want the same spot, so `dx` / `dy` above
+            -- stay the arc's
+            dx = 0, dy = 0,
+        },
     }
     for k, v in pairs(over or {}) do r[k] = v end
     return r
@@ -127,6 +161,8 @@ local function ResourceDefaults()
     return RingDefaults({
         size = 160, thickness = 14, start = 180, span = 180, clockwise = true,
         gap = 4,                      -- degrees between segments
+        -- bar mode: the points in a ROW, `rowDir` from the first, `rowGap` px apart
+        rowDir = "right", rowGap = 4,
         color = { 0.58, 0.42, 1.0 },
         resourceColor = true,         -- the game's colour for that resource
         -- At `breakAt` points or more, every segment turns `breakColor`.
@@ -828,6 +864,368 @@ end
 -- Color. A ring is either a flat color, the unit's power-type color, or a
 -- health-driven blend (a color curve the engine evaluates on the secret).
 ------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- The BAR (2026-09-21): a straight StatusBar cut to a silhouette.
+-- The other door out of a secret: `StatusBar:SetMinMaxValues` and `SetValue`
+-- both take one, and the ENGINE sizes the fill — no curve, no chunk, no seam
+-- (measured with `/gu barprobe`: 80.0% health → a fill 80.0% tall under a
+-- circle mask, and an absorb bar sized by the secret absorb). The fill's
+-- layers are one StatusBar each, all fed the same value: base (colour, or a
+-- SetGradient ACROSS the fill axis — that axis does not shrink with the
+-- value), grad (the ramp companion, ALONG the fill axis — a StatusBar crops
+-- its texture rather than stretching it, so the ramp stays put in space),
+-- mid / low (the shift colours; their alpha is the same curve the arc uses).
+-- Every texture wears its own MaskTexture of the same silhouette; the mask
+-- is sized to the shape's CANVAS so the silhouette's footprint lands exactly
+-- on the bar (the catalog's art carries 128 px of bloom padding per side).
+-- The absorb is a reverse-filled StatusBar over the whole box: from the full
+-- end back over the fill, present at full health, the way EUI draws it.
+-- The rim is the catalog's outline part, rotated and flipped with the mask.
+------------------------------------------------------------------------
+local RAMP_PLAIN = ART .. "ramp.png"    -- alpha 0→1 left to right, no shape
+local RAMP_V     = ART .. "ramp-v.png"  -- the same, bottom to top (a vertical bar's ramp)
+-- The absorb overlay's stripes: a 32 px TILE, repeated at its own size
+-- (SetHorizTile / SetVertTile with REPEAT wrap), never stretched. A
+-- StatusBar cannot tile — it stretches its texture over the box, and one
+-- pattern went flat on a wide rectangle and huge on a tall one — so the
+-- absorb StatusBar's fill is INVISIBLE and only sizes a clipping frame
+-- pinned to its rectangle; the tiled stripes live inside that frame,
+-- anchored across the whole bar. Blizzard's raid-frame shield is built the
+-- same way. The engine still sizes the visible area from the secret.
+-- ★ A tiled texture repeats at its FILE's size in UI units and ignores
+-- SetTexCoord (measured 2026-09-21: a repeat count changed nothing). The
+-- file's size IS the stripe scale: an 8 px tile carrying TWO periods (4 units).
+local HATCH = ART .. "hatch.png"
+
+local function Pct(unit, power, curve)
+    if power ~= nil then return UnitPowerPercent(unit, power, true, curve) end
+    return UnitHealthPercent(unit, true, curve)
+end
+
+-- The silhouette's geometry for a bar of `size` (the footprint's short
+-- side), from the Hub's BAR-shape row: the footprint (the bar's box), the
+-- canvas (the mask's size) and the footprint centre's offset from the
+-- canvas centre (0,0 for a centred shape; a nested SET's member sits where
+-- it was drawn). All px, y up. Rectangle: the box itself, no canvas.
+local function ShapeGeometry(bc)
+    if bc.shape == "rect" then return bc.width, bc.height, bc.width, bc.height, 0, 0 end
+    local hub = _G.GloomsHub
+    local info = hub and hub.BarShapeInfo and hub:BarShapeInfo(bc.shape)
+    if not info then return bc.size, bc.size, bc.size, bc.size, 0, 0 end
+    local fp, cv = info.footprint, info.canvas
+    local fpw, fph = fp[3] - fp[1], fp[4] - fp[2]
+    -- a set member scales by the SET's footprint, so all members share one scale
+    local ref = info.setFootprint or fp
+    local k = bc.size / math.min(ref[3] - ref[1], ref[4] - ref[2])
+    local ox = ((fp[1] + fp[3]) / 2 - cv[1] / 2) * k
+    local oy = -((fp[2] + fp[4]) / 2 - cv[2] / 2) * k
+    return fpw * k, fph * k, cv[1] * k, cv[2] * k, ox, oy
+end
+
+-- The box a bar occupies on screen (its footprint's bounding box after the
+-- rotation), and where that box's centre sits relative to the shape's
+-- canvas centre — the rotation turns the whole canvas about ITS centre, so
+-- an off-centre member swings round with its set.
+local function BarBox(bc)
+    local fw, fh, _, _, ox, oy = ShapeGeometry(bc)
+    local a = math.rad(bc.rotation or 0)
+    local c, sn = math.cos(a), math.sin(a)
+    local bw, bh = fw * math.abs(c) + fh * math.abs(sn), fw * math.abs(sn) + fh * math.abs(c)
+    return bw, bh, ox * c - oy * sn, ox * sn + oy * c
+end
+GU.BarBox = BarBox
+
+local FILL = {   -- fillDir → orientation, reverse
+    up    = { "VERTICAL",   false }, down  = { "VERTICAL",   true },
+    right = { "HORIZONTAL", false }, left  = { "HORIZONTAL", true },
+}
+
+-- `detached`: the bar's frame is placed and sized by the caller (a resource
+-- segment); otherwise it fills the holder.
+local function NewBar(holder, detached)
+    local bar = { shown = false, shift = false, gradient = false, layers = {}, masks = {}, alphaCurve = {} }
+    local fr = CreateFrame("Frame", nil, holder)
+    if not detached then fr:SetAllPoints(holder) end
+    bar.frame = fr
+    -- Every texture wears a mask of the silhouette — EXCEPT in Rectangle
+    -- mode, where the masks come OFF: a StatusBar is already a rectangle,
+    -- and a mask's clamp-to-black wrap fades its outer half-texel, which on
+    -- a stretched 8×8 was 12 px of soft edge per side (the owner, 2026-09-21).
+    local function masked(tex)
+        local m = fr:CreateMaskTexture()
+        m:SetPoint("CENTER", fr, "CENTER")
+        tex:AddMaskTexture(m)
+        bar.masks[#bar.masks + 1] = { tex = tex, mask = m, on = true }
+    end
+    bar.track = fr:CreateTexture(nil, "BACKGROUND")
+    bar.track:SetAllPoints(); bar.track:SetColorTexture(1, 1, 1, 1); masked(bar.track)
+    for i, name in ipairs(LAYERS) do
+        local sb = CreateFrame("StatusBar", nil, fr)
+        sb:SetAllPoints(); sb.levelUp = i
+        sb:SetStatusBarTexture(name == "grad" and RAMP_PLAIN or "Interface\\Buttons\\WHITE8x8")
+        masked(sb:GetStatusBarTexture())
+        bar.layers[name] = sb
+        if PROFILE[name] and name ~= "base" and name ~= "grad" then bar.alphaCurve[name] = CurveFrom(PROFILE[name]) end
+    end
+    bar.absorb = CreateFrame("StatusBar", nil, fr)
+    bar.absorb:SetAllPoints(); bar.absorb.levelUp = #LAYERS + 1
+    bar.absorb:SetStatusBarTexture("Interface\\Buttons\\WHITE8x8")
+    bar.absorb:GetStatusBarTexture():SetAlpha(0)      -- a plain zero; it only sizes the clip
+    bar.absorbClip = CreateFrame("Frame", nil, bar.absorb)
+    bar.absorbClip:SetClipsChildren(true)
+    bar.absorbClip:SetPoint("TOPLEFT", bar.absorb:GetStatusBarTexture(), "TOPLEFT")
+    bar.absorbClip:SetPoint("BOTTOMRIGHT", bar.absorb:GetStatusBarTexture(), "BOTTOMRIGHT")
+    bar.hatch = bar.absorbClip:CreateTexture(nil, "ARTWORK")
+    bar.hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
+    bar.hatch:SetHorizTile(true); bar.hatch:SetVertTile(true)
+    bar.hatch:SetAllPoints(fr)
+    masked(bar.hatch)
+    -- the rim on its own frame ABOVE the fills and the absorb (a texture on
+    -- `fr` would sit under every StatusBar child)
+    bar.rimFrame = CreateFrame("Frame", nil, fr); bar.rimFrame:SetAllPoints(fr); bar.rimFrame.levelUp = #LAYERS + 2
+    bar.rim = bar.rimFrame:CreateTexture(nil, "ARTWORK"); bar.rim:SetPoint("CENTER")
+    -- a RECTANGLE's outline needs no art: four edges inside the box
+    bar.edges = {}
+    for i = 1, 4 do
+        local e = bar.rimFrame:CreateTexture(nil, "ARTWORK"); e:SetColorTexture(1, 1, 1, 1); e:Hide()
+        bar.edges[i] = e
+    end
+
+    -- bc: the ring's `bar` block; oc: the ring's outline { on, width, color, alpha }.
+    -- Returns the box (w, h) the holder must take.
+    function bar:Configure(bc, oc)
+        oc = oc or {}
+        self.geo = true
+        local fw, fh, cw, ch = ShapeGeometry(bc)
+        local bw, bh, ox, oy = BarBox(bc)
+        local hub = _G.GloomsHub
+        -- ★ The catalog's base art has a BINARY edge (measured 2026-09-21: alpha
+        -- 0→255 in one texel), which minified ten times at a 24 px shard is a
+        -- jagged rim. Under ~192 px on screen the SMALL variant (`-base-s`, a
+        -- quarter size, resampled so the edge carries anti-aliasing) draws
+        -- clean; the full art keeps its crispness for big shapes.
+        local part = (math.max(cw, ch) < 192) and "base-s" or "base"
+        local base = bc.shape ~= "rect" and hub and hub:BarShapeAsset(bc.shape, part) or "Interface\\Buttons\\WHITE8x8"
+        local rot = math.rad(bc.rotation or 0)
+        -- ★ No SetTexCoord on a mask: flipped coordinates (either form) make
+        -- the mask hide everything (measured 2026-09-21, twice). A flip is a
+        -- matter of ART — a mirrored file — not of the mask. Rotation is fine.
+        -- the mask is centred on the CANVAS centre, which sits (-ox, -oy)
+        -- from the box centre — zero for a centred shape
+        local rect = bc.shape == "rect"
+        self.maskSpec = (not rect) and { cw, ch, base, rot, -ox, -oy } or nil   -- for a late-comer (the kick tick)
+        for _, e in ipairs(self.masks) do
+            if rect then
+                if e.on then e.tex:RemoveMaskTexture(e.mask); e.on = false end
+            else
+                if not e.on then e.tex:AddMaskTexture(e.mask); e.on = true end
+                local m = e.mask
+                m:SetSize(cw, ch)
+                m:ClearAllPoints(); m:SetPoint("CENTER", fr, "CENTER", -ox, -oy)
+                m:SetTexture(base, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+                m:SetRotation(rot)
+            end
+        end
+        local rimPart = (oc.width == "thin" and "rim-thin") or (oc.width == "thick" and "rim-thick") or "rim"
+        local rimPath = oc.on and bc.shape ~= "rect" and hub and hub:BarShapeAsset(bc.shape, rimPart)
+        self.rim:SetSize(cw, ch); self.rim:ClearAllPoints(); self.rim:SetPoint("CENTER", fr, "CENTER", -ox, -oy); self.rim:SetRotation(rot)
+        if rimPath then self.rim:SetTexture(rimPath) end
+        self.rimOn = rimPath and true or false
+        local rc_ = oc.color or { 1, 1, 1 }
+        self.rim:SetVertexColor(rc_[1], rc_[2], rc_[3]); self.rim:SetAlpha(oc.alpha or 1)
+        -- the rectangle's edges: a px width per setting, inside the box
+        self.edgesOn = (oc.on and bc.shape == "rect") or false
+        local ew = (oc.width == "thin" and 1) or (oc.width == "thick" and 6) or 3
+        local E = self.edges
+        E[1]:ClearAllPoints(); E[1]:SetPoint("TOPLEFT", fr); E[1]:SetPoint("TOPRIGHT", fr); E[1]:SetHeight(ew)
+        E[2]:ClearAllPoints(); E[2]:SetPoint("BOTTOMLEFT", fr); E[2]:SetPoint("BOTTOMRIGHT", fr); E[2]:SetHeight(ew)
+        E[3]:ClearAllPoints(); E[3]:SetPoint("TOPLEFT", fr); E[3]:SetPoint("BOTTOMLEFT", fr); E[3]:SetWidth(ew)
+        E[4]:ClearAllPoints(); E[4]:SetPoint("TOPRIGHT", fr); E[4]:SetPoint("BOTTOMRIGHT", fr); E[4]:SetWidth(ew)
+        for _, e in ipairs(E) do e:SetVertexColor(rc_[1], rc_[2], rc_[3]); e:SetAlpha(oc.alpha or 1) end
+        local dir = FILL[bc.fillDir] or FILL.up
+        local lv = fr:GetFrameLevel()
+        for _, sb in pairs(self.layers) do
+            sb:SetOrientation(dir[1]); sb:SetReverseFill(dir[2]); sb:SetFrameLevel(lv + sb.levelUp)
+        end
+        self.layers.grad:SetStatusBarTexture(dir[1] == "VERTICAL" and RAMP_V or RAMP_PLAIN)
+        self.absorb:SetOrientation(dir[1]); self.absorb:SetReverseFill(not dir[2]); self.absorb:SetFrameLevel(lv + self.absorb.levelUp)
+        self.rimFrame:SetFrameLevel(lv + self.rimFrame.levelUp)
+        self.absorbOn = self.hasAbsorb and bc.absorb ~= false or false   -- the health bar only
+        local ac = bc.absorbColor or { 1, 1, 1 }
+        self.hatch:SetVertexColor(ac[1], ac[2], ac[3])
+        self.hatch:SetAlpha(bc.absorbAlpha or 0.6)
+        self.fillDir = bc.fillDir or "up"
+        self:Apply()
+        return bw, bh
+    end
+
+    function bar:Apply()
+        local function want(name)
+            return name == "base" or (name == "grad" and self.gradient) or ((name == "mid" or name == "low") and self.shift)
+        end
+        for name, sb in pairs(self.layers) do sb:SetShown(self.shown and want(name)) end
+        self.track:SetShown(self.shown)
+        self.absorb:SetShown(self.shown and self.absorbOn)
+        self.rim:SetShown(self.shown and self.rimOn)
+        for _, e in ipairs(self.edges) do e:SetShown(self.shown and self.edgesOn) end
+    end
+    function bar:SetShown(on) self.shown = on; self:Apply() end
+    function bar:SetShift(on) self.shift = on; self:Apply() end
+    function bar:SetTrack(c, alpha) self.track:SetVertexColor(c[1], c[2], c[3]); self.track:SetAlpha(alpha) end
+
+    -- Colour ONLY, three values (the 4th lands as opacity on 12.1 — the arc's lesson).
+    local white = CreateColor(1, 1, 1, 1)
+    function bar:SetColor(name, r, g, b)
+        local sb = self.layers[name]
+        if not sb then return end
+        if name == "base" and not self.gradient then sb:GetStatusBarTexture():SetGradient("HORIZONTAL", white, white) end
+        sb:GetStatusBarTexture():SetVertexColor(r, g, b)
+    end
+    function bar:SetSolid(c)
+        self.gradient = false
+        self:SetColor("base", c[1], c[2], c[3])
+        self:Apply()
+    end
+    -- The gradient's angle is snapped to a screen axis: 0 = left→right,
+    -- 90 = bottom→top, 180, 270. ALONG the fill axis it is the ramp layer
+    -- (the tint fades in toward the far end; reversed by swapping the two
+    -- colours); ACROSS it, SetGradient on the base — that axis never shrinks.
+    function bar:SetGradient(c1, c2, angleDeg)
+        local q = math.floor(((angleDeg or 0) % 360) / 90 + 0.5) % 4    -- 0 R, 1 up, 2 L, 3 down
+        local vertical = (self.fillDir == "up" or self.fillDir == "down")
+        local along = (vertical and (q == 1 or q == 3)) or (not vertical and (q == 0 or q == 2))
+        local baseTex, gradTex = self.layers.base:GetStatusBarTexture(), self.layers.grad:GetStatusBarTexture()
+        if along then
+            -- the ramp runs with the fill direction; "toward the far end" is
+            -- up/right for q 1/0, so the pair is swapped for q 3/2 and again
+            -- when the bar itself fills the other way
+            local towardFar = (q == 1 or q == 0)
+            if self.fillDir == "down" or self.fillDir == "left" then towardFar = not towardFar end
+            local a, b = c1, c2
+            if not towardFar then a, b = c2, c1 end
+            self.gradient = true
+            baseTex:SetGradient("HORIZONTAL", white, white)
+            baseTex:SetVertexColor(a[1], a[2], a[3])
+            gradTex:SetVertexColor(b[1], b[2], b[3])
+        else
+            self.gradient = false   -- no ramp layer; the base carries it
+            local a, b = c1, c2
+            if q == 2 or q == 3 then a, b = c2, c1 end
+            baseTex:SetVertexColor(1, 1, 1)
+            baseTex:SetGradient(vertical and "HORIZONTAL" or "VERTICAL",
+                CreateColor(a[1], a[2], a[3], 1), CreateColor(b[1], b[2], b[3], 1))
+        end
+        self:Apply()
+    end
+
+    local function feed(self, max, val)
+        self.timerFor = nil
+        for _, sb in pairs(self.layers) do
+            if sb:IsShown() then sb:SetMinMaxValues(0, max); sb:SetValue(val) end
+        end
+    end
+    -- A WINDOW (a resource segment): the bar is always drawn FULL and its
+    -- layers' alpha is a step at `hi` of the overall percent — a point is
+    -- whole or absent. `profiles` may override mid / low (the breakpoint).
+    function bar:SetWindow(hi, profiles)
+        self.window = hi
+        self.alphaPts = {
+            base = { { 0, ALPHA_OFF }, { math.max(0, hi - 0.002), ALPHA_OFF }, { hi, 1 }, { 1, 1 } },
+            mid  = (profiles and profiles.mid) or PROFILE.mid,
+            low  = (profiles and profiles.low) or PROFILE.low,
+        }
+        self.alphaPts.grad = self.alphaPts.base
+        self.alphaCurve = {}
+        for name, pts in pairs(self.alphaPts) do self.alphaCurve[name] = CurveFrom(pts) end
+    end
+    local function pts(self, name) return (self.alphaPts and self.alphaPts[name]) or PROFILE[name] end
+    function bar:SetFromUnit(unit, power)
+        if not self.geo then return end
+        if self.window then feed(self, 1, 1)
+        else
+            local max = (power ~= nil) and UnitPowerMax(unit, power) or UnitHealthMax(unit)
+            local val = (power ~= nil) and UnitPower(unit, power) or UnitHealth(unit)
+            feed(self, max, val)
+        end
+        for name, curve in pairs(self.alphaCurve) do
+            local sb = self.layers[name]
+            if sb:IsShown() then sb:GetStatusBarTexture():SetAlpha(Pct(unit, power, curve)) end
+        end
+    end
+    function bar:SetFromPlain(pct, alphaScale)
+        if not self.geo then return end
+        pct = clamp(pct, 0, 1)
+        feed(self, 1, self.window and 1 or pct)
+        for name in pairs(self.alphaCurve) do
+            self.layers[name]:GetStatusBarTexture():SetAlpha(Eval(pts(self, name), pct) * (alphaScale or 1))
+        end
+    end
+    -- A cast whose times are secret: the engine animates the bar itself from
+    -- the duration object (StatusBar:SetTimerDuration — EUI's cast bar), set
+    -- ONCE per cast; the shift layers' alpha comes from the same object's
+    -- percent evaluators each tick, as the arc does.
+    function bar:SetFromDuration(d, drains)
+        if not self.geo then return end
+        local dirE = Enum.StatusBarTimerDirection
+        if self.timerFor ~= d and dirE then
+            self.timerFor = d
+            local interp = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.None
+            for _, sb in pairs(self.layers) do
+                if sb:IsShown() then
+                    sb:SetMinMaxValues(0, 1)
+                    sb:SetTimerDuration(d, interp, drains and dirE.RemainingTime or dirE.ElapsedTime)
+                end
+            end
+        end
+        local m = drains and d.EvaluateRemainingPercent or d.EvaluateElapsedPercent
+        for name, curve in pairs(self.alphaCurve) do
+            local sb = self.layers[name]
+            if sb:IsShown() then sb:GetStatusBarTexture():SetAlpha(m(d, curve, ALPHA_OFF)) end
+        end
+    end
+    -- fn(texture, piece) over one layer — the bar is its own single piece.
+    function bar:Layer(name, fn)
+        local sb = self.layers[name]
+        if sb then fn(sb:GetStatusBarTexture(), self) end
+    end
+    -- The kick tick on a bar: a hairline across the fill axis at `frac` of
+    -- the box (plain arithmetic — the plain-time path only, as the arc).
+    function bar:PlaceTick(tick, frac, thickness)
+        local w, h = self.frame:GetSize()
+        local vertical = (self.fillDir == "up" or self.fillDir == "down")
+        local rev = (self.fillDir == "down" or self.fillDir == "left")
+        if rev then frac = 1 - frac end
+        tick:ClearAllPoints()
+        if vertical then
+            tick:SetSize(w, thickness)
+            tick:SetPoint("CENTER", self.frame, "BOTTOM", 0, frac * h)
+        else
+            tick:SetSize(thickness, h)
+            tick:SetPoint("CENTER", self.frame, "LEFT", frac * w, 0)
+        end
+        tick:SetRotation(0)
+        -- cut to the silhouette like everything else on the bar (none on a rectangle)
+        local ms = self.maskSpec
+        if ms then
+            if not tick.barMask then tick.barMask = tick:GetParent():CreateMaskTexture() end
+            if not tick.barMaskOn then tick:AddMaskTexture(tick.barMask); tick.barMaskOn = true end
+            tick.barMask:ClearAllPoints(); tick.barMask:SetPoint("CENTER", self.frame, "CENTER", ms[5], ms[6])
+            tick.barMask:SetSize(ms[1], ms[2]); tick.barMask:SetTexture(ms[3], "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE"); tick.barMask:SetRotation(ms[4])
+        elseif tick.barMaskOn then
+            tick:RemoveMaskTexture(tick.barMask); tick.barMaskOn = false
+        end
+    end
+    -- The absorb overlay: sized by the secret amount against the unit's max.
+    function bar:SetAbsorb(unit)
+        if not (self.geo and self.absorbOn) then return end
+        if not unit then self.absorb:SetMinMaxValues(0, 1); self.absorb:SetValue(0) return end
+        if GU.absorbMax then self.absorb:SetMinMaxValues(0, 1); self.absorb:SetValue(1) return end
+        self.absorb:SetMinMaxValues(0, UnitHealthMax(unit))
+        self.absorb:SetValue(UnitGetTotalAbsorbs(unit) or 0)
+    end
+    return bar
+end
+
 local function PowerTypeColor(unit)
     local pType, pToken = UnitPowerType(unit)
     if issecretvalue and (issecretvalue(pType) or issecretvalue(pToken)) then return nil, pType end
@@ -906,13 +1304,23 @@ local function CreateUnitFrame(which)
             local h = CreateFrame("Frame", nil, f)
             h:SetPoint("CENTER")
             if key == "resource" then
-                local r = { holder = h, segs = {} }
+                local r = { holder = h, segs = {}, segBars = {} }
+                r.outlineHolder = CreateFrame("Frame", nil, h); r.outlineHolder:SetAllPoints(h)
                 for i = 1, GU.MAX_SEGMENTS do
-                    r.segs[i] = { track = NewArc(h, false), fill = NewArc(h, true) }
+                    r.segs[i] = { track = NewArc(h, false), fill = NewArc(h, true), outline = NewArc(r.outlineHolder, false) }
+                    r.segBars[i] = NewBar(h, true)     -- bar mode: one shape per point
                 end
                 f.rings[key] = r
             else
                 local r = { holder = h, track = NewArc(h, false), fill = NewArc(h, true) }
+                r.fillArc = r.fill
+                -- the arc's OUTLINE: a plain, full arc on a sub-holder one level
+                -- under the track (+1/+2) and its caps (+0)
+                r.outlineHolder = CreateFrame("Frame", nil, h); r.outlineHolder:SetAllPoints(h)
+                r.outline = NewArc(r.outlineHolder, false)
+                -- bar mode: the same holder, the other renderer
+                r.bar = NewBar(h)
+                r.bar.hasAbsorb = (key == "health")
                 if key == "health" then
                     -- The SHIELD TINT: a second copy of the fill arc in the shield
                     -- colour, above the fill, behind two frames — `gate`, whose
@@ -980,13 +1388,53 @@ local function CreateUnitFrame(which)
     return f
 end
 
+-- The outline of an arc: the same arc grown by `w` px on every side —
+-- outer edge, inner edge, and both ends (the span widened by the angle w
+-- subtends at the band's middle) — drawn plain and full in the outline
+-- colour under the track. `g` is the track's geometry table.
+local OUTLINE_PX = { thin = 1, medium = 3, thick = 6 }
+local function OutlineWidth(rc) return OUTLINE_PX[rc.outlineWidth or "medium"] or 3 end
+local function ConfigureOutline(arc, holder, g, rc)
+    local on = rc.enabled and rc.outline and true or false
+    arc:SetShown(on)
+    if not on then return end
+    -- the outline's chunks sit at sub-holder +1/+2, so the sub-holder goes
+    -- three under the ring's holder to land beneath the caps (+0) and the
+    -- track (+1/+2); a ring at level < 3 ties, which only a unit at level 0 can produce
+    holder:SetFrameLevel(math.max(0, holder:GetParent():GetFrameLevel() - 3))
+    local w = OutlineWidth(rc)
+    local outerR, innerR = ART_R * g.size / 2, math.max(0, g.inner) / 2
+    local rMid = math.max(1, (outerR + innerR) / 2)
+    local dDeg = math.deg(w / rMid)
+    local sgn = g.clockwise and -1 or 1
+    local g2 = {}
+    for k, v in pairs(g) do g2[k] = v end
+    g2.size = g.size + 2 * w / ART_R
+    g2.inner = math.max(0, g.inner - 2 * w)
+    g2.thickness = (g.thickness or 22) + 2 * w
+    if (g.span or 180) < 360 then
+        g2.start = g.start - sgn * dDeg
+        g2.span = math.min(360, g.span + 2 * dDeg)
+    end
+    arc:Configure(g2)
+    local c = rc.outlineColor or { 1, 1, 1 }
+    arc:SetColor("base", c[1], c[2], c[3])
+    arc:SetFromPlain(1, rc.outlineAlpha or 1)
+end
+
 -- The unit frame's extent: the union of its rings' boxes.
 local function UnitExtent(cfg)
     local ext = 60
     for _, key in ipairs(GU.RINGS) do
         local rc = cfg.rings[key]
         if rc and rc.enabled then
-            ext = math.max(ext, rc.size + 2 * math.max(math.abs(rc.dx or 0), math.abs(rc.dy or 0)))
+            local size = rc.size
+            if rc.mode == "bar" and rc.bar then
+                local bw, bh = BarBox(rc.bar); size = math.max(bw, bh)
+                if key == "resource" then size = math.max(size, size * GU.MAX_SEGMENTS) end   -- the row, generously
+            end
+            local off = (rc.mode == "bar" and rc.bar) and rc.bar or rc
+            ext = math.max(ext, size + 2 * math.max(math.abs(off.dx or 0), math.abs(off.dy or 0)))
         end
     end
     return ext
@@ -1016,16 +1464,45 @@ function GU:ApplyLayout(which)
         -- Each ring owns a band of 16 frame levels, in GU.RINGS order, so
         -- overlapping rings never interleave their pieces: track +0..+2, fill
         -- +3..+6, the health ring's shield copy +11..+14, the kick tick +15.
-        r.holder:SetFrameLevel(f:GetFrameLevel() + 1 + (i - 1) * 16)
+        r.holder:SetFrameStrata(rc.strata or cfg.strata or "MEDIUM")
+        -- An own level is the level of the display's LOWEST piece (the pieces
+        -- sit at holder+1 up: 7 levels for a bar, 16 for an arc), so a
+        -- display "at 131" and an Overlays graphic "at 131" are level — the
+        -- owner, 2026-09-21, after an overlay landed inside the stack.
+        r.holder:SetFrameLevel(rc.level and math.max(0, rc.level - 1) or (f:GetFrameLevel() + 1 + (i - 1) * 16))
         local artDef = GU.RING_TEXTURES[rc.texture] or GU.RING_TEXTURES.disc
         local art, ramp = artDef.path, artDef.ramp or GU.RING_TEXTURES.disc.ramp
         r.holder:SetSize(rc.size, rc.size)
         r.holder:ClearAllPoints()
-        r.holder:SetPoint("CENTER", f, "CENTER", rc.dx or 0, rc.dy or 0)
+        local off = (rc.mode == "bar" and rc.bar) and rc.bar or rc   -- each mode keeps its own offset
+        local sx, sy = 0, 0
+        if rc.mode == "bar" and rc.bar and key ~= "resource" then local _, _, ox, oy = BarBox(rc.bar); sx, sy = ox, oy end
+        r.holder:SetPoint("CENTER", f, "CENTER", (off.dx or 0) + sx, (off.dy or 0) + sy)
         local inner = rc.size - 2 * math.max(2, rc.thickness or 22)
+        local isBar = rc.mode == "bar" and r.bar and rc.bar
         if key == "resource" then
             self:LayoutResource(which, rc, r, art, ramp, inner)
+        elseif isBar then
+            if key == "cast" then r.holder:SetShown(r.casting and true or false) end
+            -- BAR MODE: the arcs go dark, the holder takes the bar's box, and
+            -- `r.fill` IS the bar — Refresh drives whichever renderer is live
+            -- through the same four calls (SetFromUnit / SetFromPlain / SetSolid / SetColor).
+            r.fill = r.bar
+            r.track:SetShown(false); r.fillArc:SetShown(false)
+            if r.shield then r.shield.gate:Hide() end
+            r.outline:SetShown(false)
+            local bw, bh = r.bar:Configure(rc.bar, { on = rc.outline, width = rc.outlineWidth, color = rc.outlineColor, alpha = rc.outlineAlpha })
+            r.holder:SetSize(bw, bh)
+            r.bar:SetShown(rc.enabled)
+            r.bar:SetShift(rc.shift and true or false)
+            r.bar:SetTrack(rc.trackColor or { 1, 1, 1 }, rc.trackAlpha or 0.12)
+            if rc.colorMode == "gradient" then r.bar:SetGradient(rc.color, rc.color2, rc.gradientAngle)
+            else r.bar:SetSolid(rc.color) end
+            r.bar:SetColor("mid", rc.midColor[1], rc.midColor[2], rc.midColor[3])
+            r.bar:SetColor("low", rc.lowColor[1], rc.lowColor[2], rc.lowColor[3])
         else
+        r.fill = r.fillArc
+        if r.bar then r.bar:SetShown(false) end
         if key == "cast" then r.holder:SetShown(r.casting and true or false) end
         r.track:SetShown(rc.enabled)
         r.fill:SetShown(rc.enabled)
@@ -1034,6 +1511,7 @@ function GU:ApplyLayout(which)
                     thickness = rc.thickness, art = art, ramp = ramp, roundStart = rc.roundStart, roundEnd = rc.roundEnd }
         r.track:Configure(g)
         r.fill:Configure(g)
+        ConfigureOutline(r.outline, r.outlineHolder, g, rc)
         local tc = rc.trackColor or { 1, 1, 1 }
         r.track:SetColor("base", tc[1], tc[2], tc[3])
         r.track:SetFromPlain(1, rc.trackAlpha or 0.12)
@@ -1128,10 +1606,52 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
         }
     end
     local tc = rc.trackColor or { 1, 1, 1 }
+    local isBar = rc.mode == "bar" and rc.bar
+    if isBar then
+        -- BAR MODE: n copies of the silhouette in a row; segment i is whole
+        -- once the value reaches i/n. The holder takes the row's extent.
+        local bw, bh = BarBox(rc.bar)
+        local gapPx = rc.rowGap or 4
+        local along = (rc.rowDir == "left" or rc.rowDir == "right")
+        local count = math.max(1, n or 1)
+        local rowW = along and (count * bw + (count - 1) * gapPx) or bw
+        local rowH = along and bh or (count * bh + (count - 1) * gapPx)
+        r.holder:SetSize(rowW, rowH)
+        r.rowBox = math.max(rowW, rowH)
+        for i = 1, GU.MAX_SEGMENTS do
+            local sg, b = r.segs[i], r.segBars[i]
+            sg.track:SetShown(false); sg.fill:SetShown(false); sg.outline:SetShown(false)
+            local live = on and i <= n
+            if live then
+                local step = (i - 1) * ((along and bw or bh) + gapPx)
+                b.frame:ClearAllPoints(); b.frame:SetSize(bw, bh)
+                if rc.rowDir == "right" then b.frame:SetPoint("LEFT", r.holder, "LEFT", step, 0)
+                elseif rc.rowDir == "left" then b.frame:SetPoint("RIGHT", r.holder, "RIGHT", -step, 0)
+                elseif rc.rowDir == "up" then b.frame:SetPoint("BOTTOM", r.holder, "BOTTOM", 0, step)
+                else b.frame:SetPoint("TOP", r.holder, "TOP", 0, -step) end
+                b:Configure(rc.bar, { on = rc.outline, width = rc.outlineWidth, color = rc.outlineColor, alpha = rc.outlineAlpha })
+                b:SetWindow(i / n, profiles)
+                b:SetShown(true)
+                b:SetShift(brk ~= nil)
+                b:SetTrack(tc, rc.trackAlpha or 0.12)
+                if rc.colorMode == "gradient" then b:SetGradient(color, rc.color2, rc.gradientAngle)
+                else b:SetSolid(color) end
+                if brk then
+                    local bc = rc.breakColor
+                    b:SetColor("low", bc[1], bc[2], bc[3]); b:SetColor("mid", bc[1], bc[2], bc[3])
+                end
+            else
+                b:SetShown(false)
+            end
+        end
+        return
+    end
+    r.rowBox = nil
     for i = 1, GU.MAX_SEGMENTS do
         local sg = r.segs[i]
+        r.segBars[i]:SetShown(false)
         local live = on and i <= n
-        sg.track:SetShown(live); sg.fill:SetShown(live)
+        sg.track:SetShown(live); sg.fill:SetShown(live); sg.outline:SetShown(false)
         sg.fill.profiles = profiles
         sg.fill:SetShift(brk ~= nil)
         if live then
@@ -1142,6 +1662,7 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
                         roundStart = rc.roundStart, roundEnd = rc.roundEnd }
             sg.track:Configure(g)
             sg.fill:Configure(g)
+            ConfigureOutline(sg.outline, r.outlineHolder, g, rc)
             sg.track:SetColor("base", tc[1], tc[2], tc[3])
             sg.track:SetFromPlain(1, rc.trackAlpha or 0.12)
             if rc.colorMode == "gradient" then sg.fill:SetGradient(color, rc.color2, rc.gradientAngle)
@@ -1164,6 +1685,7 @@ function GU:Refresh(which)
         for _, key in ipairs(GU.RINGS) do
             local r = f.rings[key]
             if r and r.fill then r.fill:SetFromPlain(0) end
+            if r and r.bar then r.bar:SetAbsorb(nil) end
             if r and r.shield then r.shield.arc:SetFromPlain(0); r.shield.gate:SetAlpha(0) end
         end
         self:RefreshTexts(f, unit)
@@ -1181,7 +1703,9 @@ function GU:Refresh(which)
             r.fill:SetSolid(ok and { cr, cg, cb } or rc.color)
         end
         r.fill:SetFromUnit(unit)
-        if rc.shieldTint and r.shield then
+        if rc.mode == "bar" and r.bar then
+            r.bar:SetAbsorb(unit)
+        elseif rc.shieldTint and r.shield then
             -- The presence gate (measured 2026-09-19, /gu gate): a secret
             -- alpha of ZERO is ignored, so the frame is set to a PLAIN zero
             -- first and then to the absorb amount — shown iff shielded, and
@@ -1224,10 +1748,11 @@ function GU:Refresh(which)
             if ready and total > 0 then plain = ready / total end
         end
         for i = 1, r.n do
-            if plain then r.segs[i].fill:SetFromPlain(plain)
+            local seg = (rc.mode == "bar" and rc.bar) and r.segBars[i] or r.segs[i].fill
+            if plain then seg:SetFromPlain(plain)
             else
-                local ok = pcall(r.segs[i].fill.SetFromUnit, r.segs[i].fill, unit, r.pType)
-                if not ok then r.segs[i].fill:SetFromPlain(0) end
+                local ok = pcall(seg.SetFromUnit, seg, unit, r.pType)
+                if not ok then seg:SetFromPlain(0) end
             end
         end
     end
@@ -1366,7 +1891,8 @@ local function KickExtras(r, rc, st, pct)
         -- on this path, so the piece's own base gate decides in Lua.
         fill:Layer("mid", function(t, piece)
             if not t:IsShown() then return end
-            local gate = piece.alphaPts and piece.alphaPts.base and Eval(piece.alphaPts.base, pct) or ALPHA_OFF
+            local gate = piece.PlaceTick and 1   -- a bar is one piece, always reached
+                or (piece.alphaPts and piece.alphaPts.base and Eval(piece.alphaPts.base, pct)) or ALPHA_OFF
             if gate <= ALPHA_OFF then t:SetAlpha(ALPHA_OFF)
             else t:SetAlpha(d:EvaluateRemainingDuration(a, ALPHA_OFF)) end
         end)
@@ -1374,7 +1900,25 @@ local function KickExtras(r, rc, st, pct)
     elseif fill.shift then
         fill:SetShift(false)
     end
-    if rc.kickTick and fill.geo then
+    if rc.kickTick and fill.PlaceTick then
+        -- a BAR: the tick sits at the fraction of the cast where the kick returns
+        local tick = EnsureTick(r)
+        local kc = rc.kickTickColor
+        tick:SetVertexColor(kc[1], kc[2], kc[3], 1)
+        tick:Show()
+        local total = math.max(0.001, endS - startS)
+        -- the return time is secret-safe only through the object; the PLACE
+        -- is plain arithmetic on the cast's clock, so it is evaluated as a
+        -- rotation-free alpha gate plus a position from the plain remaining
+        -- kick time, which C_Spell.GetSpellCooldown gives on the plain path
+        local cd = C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(activeKick)
+        local kickRem = cd and cd.startTime and cd.duration and (cd.startTime + cd.duration - nowS) or 0
+        if issecretvalue and issecretvalue(kickRem) then tick:Hide() return end
+        local x = (nowS - startS + math.max(0, kickRem)) / total
+        if st.channel and rc.channelDrains then x = 1 - x end
+        fill:PlaceTick(tick, clamp(x, 0, 1), 2)
+        tick:SetAlpha(d:EvaluateRemainingDuration(a, ALPHA_OFF))
+    elseif rc.kickTick and fill.geo then
         local geo = fill.geo
         local tick = EnsureTick(r)
         local w = geo.capD
@@ -1590,6 +2134,7 @@ end
 -- Fill a profile out to the current shape: defaults, then the field
 -- migrations, then the two seeded lists. Every profile passes through here
 -- before it is drawn, whether migrated, created, copied or switched to.
+local BAR_SHAPE_MIGRATE = { circle = "orb", pill21 = "pill", pill32 = "pill" }
 local function PrepareProfile(prof)
     ApplyDefaults(prof, DEFAULTS)
     for _, which in ipairs(GU.UNITS) do
@@ -1599,6 +2144,20 @@ local function PrepareProfile(prof)
                 -- Same-day migration (2026-09-19): "shift" was briefly a colour MODE; it is a toggle now.
                 if rc.colorMode == "shift" then rc.colorMode, rc.shift = "solid", true end
                 if rc.texture == "ring" then rc.texture = "disc" end
+                -- Same-day migration (2026-09-21): bar shapes came from the button
+                -- catalog for a few hours; they are their own family now.
+                -- Same-day migration (2026-09-21): the outline was the bar's for an hour
+                if rc.bar and rc.bar.rim ~= nil then
+                    rc.outline, rc.outlineWidth = rc.bar.rim, rc.bar.rimWidth or "medium"
+                    rc.outlineColor, rc.outlineAlpha = rc.bar.rimColor or rc.outlineColor, rc.bar.rimAlpha or 1
+                    rc.bar.rim, rc.bar.rimWidth, rc.bar.rimColor, rc.bar.rimAlpha = nil, nil, nil, nil
+                end
+                if rc.bar and rc.bar.shape and rc.bar.shape ~= "rect" then
+                    local hub = _G.GloomsHub
+                    if not (hub and hub.BAR_SHAPES and hub.BAR_SHAPES[rc.bar.shape]) then
+                        rc.bar.shape = BAR_SHAPE_MIGRATE[rc.bar.shape] or "orb"
+                    end
+                end
             end
         end
         EnsureTexts(prof[which]); EnsureAuras(prof[which], which)
@@ -1958,6 +2517,58 @@ SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
     end
     if msg == "gate" then ProbeGate() return end
     if msg == "gate off" then if GU.gateProbe then GU.gateProbe.holder:Hide() end return end
+    -- QA until the tab has it: /gu bar <health|power> <shape|rect|off> [size]
+    --   · /gu bar <ring> dir <up|down|left|right> · rot <deg> · flip <h|v> · rim · absorb · grad <deg>|solid
+    local ring, rest = msg:match("^bar%s+(%a+)%s*(.*)$")
+    if ring == "health" or ring == "power" or ring == "resource" or ring == "cast" then
+        local rc = db.player.rings[ring]
+        if not rc then Chat("no " .. ring .. " ring on the player") return end
+        local a, b = rest:match("^(%S+)%s*(%S*)$")
+        if a == "off" then rc.mode = "arc"
+        elseif a == "reset" then
+            -- the bar block and the colouring back to factory; the mode stays
+            rc.bar = nil; ApplyDefaults(rc, DEFAULTS.player.rings[ring])
+            rc.colorMode, rc.shift = "solid", false
+        elseif a == "debug" then
+            local bar = frames.player.rings[ring].bar or frames.player.rings[ring].segBars[1]
+            local c = rc.color
+            Chat(("%s config: color=%.2f,%.2f,%.2f colorMode=%s classColor=%s powerColor=%s"):format(ring, c[1], c[2], c[3], tostring(rc.colorMode), tostring(rc.classColor), tostring(rc.powerColor)))
+            for name, sb in pairs(bar.layers) do
+                local tex = sb:GetStatusBarTexture()
+                local mn, mx = sb:GetMinMaxValues()
+                local vr, vg, vb, va = tex:GetVertexColor()
+                local sv = function(x) if issecretvalue and issecretvalue(x) then return "SECRET" end return tostring(x) end
+                Chat(("%s: shown=%s level=%d tex=%s alpha=%.2f vertex=%.2f,%.2f,%.2f,%.2f value=%s/%s size=%sx%s"):format(
+                    name, tostring(sb:IsShown()), sb:GetFrameLevel(), tostring(tex:GetTexture()), tex:GetAlpha(),
+                    vr or -1, vg or -1, vb or -1, va or -1, sv(sb:GetValue()), sv(mx), sv(tex:GetWidth()), sv(tex:GetHeight())))
+            end
+            Chat(("gradient=%s shift=%s fillDir=%s colorMode=%s"):format(tostring(bar.gradient), tostring(bar.shift), tostring(bar.fillDir), rc.colorMode))
+            return
+        elseif a == "dir" then rc.bar.fillDir = b
+        elseif a == "rot" then rc.bar.rotation = tonumber(b) or 0
+        elseif a == "flip" then Chat("flips are art, not the mask (a mask refuses flipped texcoords) — later") return
+        elseif a == "absorbmax" then GU.absorbMax = not GU.absorbMax   -- QA: draw the absorb overlay at FULL
+        elseif a == "strata" then rc.strata = (b ~= "" and b ~= "auto") and b:upper() or nil
+        elseif a == "row" then rc.rowDir = b
+        elseif a == "rowgap" then rc.rowGap = tonumber(b) or 4
+        elseif a == "level" then rc.level = tonumber(b)
+        elseif a == "rim" then rc.outline = not rc.outline
+        elseif a == "absorb" then rc.bar.absorb = not rc.bar.absorb
+        elseif a == "shift" then rc.shift = not rc.shift
+        elseif a == "solid" then rc.colorMode = "solid"
+        elseif a == "grad" then rc.colorMode = "gradient"; rc.gradientAngle = tonumber(b) or 90
+        elseif a then
+            rc.mode = "bar"; rc.bar.shape = a
+            if tonumber(b) then rc.bar.size = tonumber(b) end
+        end
+        GU:ApplyLayout("player")
+        local h = frames.player.rings[ring].holder
+        Chat(("player %s: mode=%s shape=%s size=%d dir=%s rot=%d rim=%s absorb=%s color=%s shift=%s · strata=%s level=%s (drawn at %s %d)"):format(
+            ring, rc.mode, rc.bar.shape, rc.bar.size, rc.bar.fillDir, rc.bar.rotation,
+            tostring(rc.outline), tostring(rc.bar.absorb), rc.colorMode, tostring(rc.shift),
+            tostring(rc.strata or "auto"), tostring(rc.level or "auto"), h:GetFrameStrata(), h:GetFrameLevel() + 1))
+        return
+    end
     -- QA: /gu text <template> · /gu text target <template> — sets the FIRST
     -- text piece's template (the tab is the real editor).
     local which, tpl = msg:match("^text%s+(target)%s+(.+)$")

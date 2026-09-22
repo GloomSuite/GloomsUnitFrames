@@ -481,14 +481,105 @@ local function pct(key, field, default)   -- a 0..1 field as 0..100
          function(v) local rc = RingCfg(key); if rc then rc[field] = v / 100; GU:ApplyLayout(selected) end end
 end
 
+local STRATA = {
+  { "BACKGROUND", "Background", "Behind almost everything." },
+  { "LOW",        "Low",        "Behind most frames." },
+  { "MEDIUM",     "Medium",     "The default. With most addon frames." },
+  { "HIGH",       "High",       "In front of most frames." },
+  { "DIALOG",     "Dialog",     "Above almost everything." },
+}
+local STRATA_LABEL = {}
+for _, s in ipairs(STRATA) do STRATA_LABEL[s[1]] = s[2] end
+
+-- the ring's `bar` block (bar mode)
+local function bnum(key, field, default)
+  return function() local rc = RingCfg(key); return rc and rc.bar and orDefault(rc.bar[field], default) end
+end
+local function setBar(key, field)
+  return function(v) local rc = RingCfg(key); if rc and rc.bar then rc.bar[field] = v; GU:ApplyLayout(selected); RefreshList() end end
+end
+local function bpct(key, field, default)
+  return function() local rc = RingCfg(key); return rc and rc.bar and math.floor((orDefault(rc.bar[field], default)) * 100 + 0.5) or default * 100 end,
+         function(v) local rc = RingCfg(key); if rc and rc.bar then rc.bar[field] = v / 100; GU:ApplyLayout(selected) end end
+end
+local FILL_LABEL = { up = "Bottom to top", down = "Top to bottom", right = "Left to right", left = "Right to left" }
+local FILL_ORDER = { "up", "down", "right", "left" }
+local ROW_LABEL  = { right = "To the right", left = "To the left", up = "Upward", down = "Downward" }
+local ROW_ORDER  = { "right", "left", "up", "down" }
+
 local function ringSection(b, sc, key, title, kind)
   local isHealth, isPower, isResource, isCast = kind == "health", kind == "power", kind == "resource", kind == "cast"
   local w = {}
   local g = UI.grid(b, -8)
   local function R() sc.refresh() end
+  local function isBar() local rc = RingCfg(key); return rc and rc.mode == "bar" end
 
-  w.enabled = cToggle(g, "Show this ring", rnum(key, "enabled", true), setRing(key, "enabled"),
-    "Draws the " .. key .. " arc for this unit.")
+  w.enabled = cToggle(g, "Show this " .. (isResource and "display" or "ring"), rnum(key, "enabled", true), setRing(key, "enabled"),
+    "Draws the " .. key .. " display for this unit.")
+  -- Arc or Bar: the arc is the ring engine; a bar is a straight fill cut to
+  -- a silhouette from the Hub's shape catalog (it can show a real absorb).
+  w.drawn = cChoice(g, "Drawn as", {
+      { "arc", "Arc", "A ring segment: any span, either direction, round caps." },
+      { "bar", "Bar", "A straight fill cut to a shape — a circle, a pill, a rectangle… — filling as a level. The health bar can show a real absorb overlay this way." } },
+    66, function(v) setRing(key, "mode")(v); R() end)
+
+  -- BAR cells
+  -- the Hub's BAR-shape family — its own list, never the button shapes
+  w.shape = cDropdown(g, "Shape", 190,
+    function()
+      local k = bnum(key, "shape", "orb")()
+      if k == "rect" then return "Rectangle" end
+      local hub = _G.GloomsHub; local info = hub and hub.BAR_SHAPES and hub.BAR_SHAPES[k]
+      return info and info.label or tostring(k)
+    end,
+    function()
+      local opts = { { label = "Rectangle", value = "rect" } }
+      local hub = _G.GloomsHub
+      if hub and hub.BAR_SHAPE_ORDER then
+        for _, k in ipairs(hub.BAR_SHAPE_ORDER) do opts[#opts + 1] = { label = hub.BAR_SHAPES[k].label, value = k } end
+      end
+      return opts
+    end,
+    bnum(key, "shape", "orb"),
+    function(v) setBar(key, "shape")(v); R() end,
+    "The silhouette the fill is cut to. A shape fixes its own proportions — one Size sets it; a Rectangle is free.")
+  w.bsize = cNum(g, "Size", 8, 500, bnum(key, "size", 120), setBar(key, "size"),
+    "px — the shape's short side; the long side follows the shape")
+  w.bwidth = cNum(g, "Width", 8, 800, bnum(key, "width", 200), setBar(key, "width"))
+  w.bheight = cNum(g, "Height", 4, 800, bnum(key, "height", 24), setBar(key, "height"))
+  w.brot = cNum(g, "Rotation", 0, 359, bnum(key, "rotation", 0), setBar(key, "rotation"),
+    "degrees, counter-clockwise. The shape turns; the fill still runs straight along the screen's axis you choose below.")
+  w.fillDir = cDropdown(g, "Fills", 160,
+    function() return FILL_LABEL[bnum(key, "fillDir", "up")()] or "Bottom to top" end,
+    function() local o = {}; for _, k in ipairs(FILL_ORDER) do o[#o + 1] = { label = FILL_LABEL[k], value = k } end; return o end,
+    bnum(key, "fillDir", "up"),
+    function(v) setBar(key, "fillDir")(v); R() end)
+  if isResource then
+    w.rowDir = cDropdown(g, "Points run", 160,
+      function() return ROW_LABEL[rnum(key, "rowDir", "right")()] or "To the right" end,
+      function() local o = {}; for _, k in ipairs(ROW_ORDER) do o[#o + 1] = { label = ROW_LABEL[k], value = k } end; return o end,
+      rnum(key, "rowDir", "right"),
+      setRing(key, "rowDir"),
+      "One shape per point, laid out from the first in this direction.")
+    w.rowGap = cNum(g, "Gap between points", 0, 60, rnum(key, "rowGap", 4), setRing(key, "rowGap"), "px")
+  end
+  if isHealth then
+    local aw = {}
+    w.absorb = cToggle(g, "Show absorb shields", bnum(key, "absorb", true),
+      function(v) setBar(key, "absorb")(v); R() end,
+      "A striped overlay the size of the unit's absorb, laid from the FULL end back over the fill — so a shield shows at full health too. Color and opacity behind the cog.",
+      { title = "Absorb overlay", w = 300,
+        build = function(c)
+          local pg = UI.grid(c, -6, { cols = 1 })
+          aw.color = cColor(pg, "Stripe color", bnum(key, "absorbColor"), setBar(key, "absorbColor"), "Unit Frames › " .. title .. " absorb")
+          aw.alpha = cNum(pg, "Stripe opacity", 0, 100, bpct(key, "absorbAlpha", 0.6))
+          aw.grid = pg
+          return pg:layout() + 4
+        end,
+        onOpen = function() aw.color:refresh(); aw.alpha:refresh(); return aw.grid:layout() + 4 end })
+  end
+
+  -- ARC cells
   w.dir = cDropdown(g, "Fills", 160,
     function() local rc = RingCfg(key); return (rc and rc.clockwise) and "Clockwise" or "Counter-clockwise" end,
     function() return { { label = "Clockwise", value = "cw" }, { label = "Counter-clockwise", value = "ccw" } } end,
@@ -500,8 +591,13 @@ local function ringSection(b, sc, key, title, kind)
     "px — this ring's outer diameter. Smaller rings nest inside larger ones.")
   w.thick = cNum(g, "Thickness", 2, 350, rnum(key, "thickness", 22), setRing(key, "thickness"),
     "px — cut from the inside; half the size or more is a solid disc")
-  w.dx = cNum(g, "Offset X", -300, 300, rnum(key, "dx", 0), setRing(key, "dx"))
-  w.dy = cNum(g, "Offset Y", -300, 300, rnum(key, "dy", 0), setRing(key, "dy"))
+  -- one pair of cells, reading whichever mode's offset is live (they are separate)
+  local function offGet(field) return function() local rc = RingCfg(key); if not rc then return 0 end
+    local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; return orDefault(t[field], 0) end end
+  local function offSet(field) return function(v) local rc = RingCfg(key); if not rc then return end
+    local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; t[field] = v; GU:ApplyLayout(selected); RefreshList() end end
+  w.dx = cNum(g, "Offset X", -300, 300, offGet("dx"), offSet("dx"), "px from the unit's centre. The arc and the bar each keep their own.")
+  w.dy = cNum(g, "Offset Y", -300, 300, offGet("dy"), offSet("dy"), "px from the unit's centre. The arc and the bar each keep their own.")
   w.start = cNum(g, "Start angle", 0, 359, rnum(key, "start", 180), setRing(key, "start"),
     "degrees — 0 is right, 90 top, 180 left, 270 bottom. Where the FULL end sits.")
   w.span = cNum(g, "Arc span", 10, 360, rnum(key, "span", 180), setRing(key, "span"),
@@ -520,6 +616,51 @@ local function ringSection(b, sc, key, title, kind)
     w.roundEnd = cToggle(g, "Round the moving end", rnum(key, "roundEnd", false), setRing(key, "roundEnd"),
       "A round cap that rides the leading edge as the value moves.")
   end
+
+  -- OUTLINE — a setting of the display, drawn in either mode
+  do
+    local rw = {}
+    w.rim = cToggle(g, "Outline", rnum(key, "outline", false),
+      function(v) setRing(key, "outline")(v); R() end,
+      "An outline around the display's shape — a bar's silhouette, or the arc's whole track including its ends. Width, color and opacity are behind the cog.",
+      { title = "Outline", w = 300,
+        build = function(c)
+          local pg = UI.grid(c, -6, { cols = 1 })
+          local WIDTH_LABEL = { thin = "Thin", medium = "Medium", thick = "Thick" }
+          rw.width = cDropdown(pg, "Outline width", 120,
+            function() return WIDTH_LABEL[rnum(key, "outlineWidth", "medium")()] or "Medium" end,
+            function() return { { label = "Thin", value = "thin" }, { label = "Medium", value = "medium" }, { label = "Thick", value = "thick" } } end,
+            rnum(key, "outlineWidth", "medium"),
+            setRing(key, "outlineWidth"),
+            "Thin is a hairline — about 1 px. On a shaped bar the outline scales with the shape; on an arc or a rectangle it is a fixed 1 / 3 / 6 px.")
+          rw.color = cColor(pg, "Outline color", rnum(key, "outlineColor"), setRing(key, "outlineColor"), "Unit Frames › " .. title .. " outline")
+          rw.alpha = cNum(pg, "Outline opacity", 0, 100, pct(key, "outlineAlpha", 1))
+          rw.grid = pg
+          return pg:layout() + 4
+        end,
+        onOpen = function() rw.width:refresh(); rw.color:refresh(); rw.alpha:refresh(); return rw.grid:layout() + 4 end })
+  end
+  -- LAYER per display: off = the unit's layer and the automatic order
+  -- (health under power under resource under cast); on = this display's own
+  -- strata and level, so it can sit between two Overlays graphics.
+  w.ownLayer = cToggle(g, "Own layer", function() local rc = RingCfg(key); return rc and rc.level ~= nil end,
+    function(v)
+      local rc = RingCfg(key); if not rc then return end
+      if v then
+        local f = GU:Frame(selected); local h = f and f.rings[key] and f.rings[key].holder
+        rc.strata = h and h:GetFrameStrata() or "MEDIUM"
+        rc.level = h and (h:GetFrameLevel() + 1) or 11    -- the lowest piece's level
+      else rc.strata, rc.level = nil, nil end
+      GU:ApplyLayout(selected); R()
+    end,
+    "Off: this display follows the unit's Layer and draws in the standard order. On: give it its own layer and level — the same two numbers Gloom's Overlays uses — to slot it between overlay graphics.")
+  w.strata = cDropdown(g, "Layer", 150,
+    function() local rc = RingCfg(key); return rc and STRATA_LABEL[rc.strata or "MEDIUM"] or "Medium" end,
+    function() local opts = {}; for _, st in ipairs(STRATA) do opts[#opts + 1] = { label = st[2], value = st[1] } end; return opts end,
+    function() local rc = RingCfg(key); return rc and (rc.strata or "MEDIUM") end,
+    setRing(key, "strata"))
+  w.level = cNum(g, "Level within the layer", 0, 1000, rnum(key, "level", 11), setRing(key, "level"),
+    "The level of this display's lowest piece; it stacks upward from here — a bar takes 7 levels, an arc 16. An Overlays graphic is one level. To put one UNDER this display give it a lower number; to put one OVER it, a number above this plus 6 (bar) or 15 (arc).")
 
   w.trackColor = cColor(g, "Empty track color", rnum(key, "trackColor"), setRing(key, "trackColor"),
     "Unit Frames › " .. title .. " track")
@@ -560,7 +701,7 @@ local function ringSection(b, sc, key, title, kind)
   end
   w.color2 = cColor(g, "End color", rnum(key, "color2"), setRing(key, "color2"), "Unit Frames › " .. title .. " gradient end")
   w.angle = cNum(g, "Gradient angle", 0, 359, rnum(key, "gradientAngle", 0), setRing(key, "gradientAngle"),
-    "degrees — 0 runs left to right, 90 bottom to top")
+    "degrees — 0 runs left to right, 90 bottom to top. A bar snaps it to the nearest of the four.")
 
   if isHealth or isPower then
     w.shift = cToggle(g, "Shift color as it drains", rnum(key, "shift", false),
@@ -654,11 +795,36 @@ local function ringSection(b, sc, key, title, kind)
   sc.refresh = function()
     local rc = RingCfg(key)
     if not rc then return end
-    w.enabled:refresh(); w.dir:refresh()
+    local bar = rc.mode == "bar"
+    w.enabled:refresh(); w.drawn:sync(bar and "bar" or "arc")
+    -- arc cells
+    for _, cell in ipairs({ w.dir, w.size, w.thick, w.start, w.span, w.roundStart, w.roundEnd, w.gap }) do
+      if cell then cell:show(not bar) end
+    end
+    w.dir:refresh()
     w.size:refresh(); w.thick:refresh(); w.dx:refresh(); w.dy:refresh()
     w.start:refresh(); w.span:refresh()
     w.roundStart:refresh(); if w.roundEnd then w.roundEnd:refresh() end
     if w.gap then w.gap:refresh() end
+    -- bar cells
+    local rect = bar and rc.bar and rc.bar.shape == "rect"
+    w.shape:show(bar); w.shape:refresh()
+    w.bsize:show(bar and not rect); w.bsize:refresh()
+    w.bwidth:show(rect); w.bwidth:refresh()
+    w.bheight:show(rect); w.bheight:refresh()
+    w.brot:show(bar); w.brot:refresh()
+    w.fillDir:show(bar); w.fillDir:refresh()
+    if w.rowDir then w.rowDir:show(bar); w.rowDir:refresh(); w.rowGap:show(bar); w.rowGap:refresh() end
+    w.rim:refresh()
+    cogEnabled(w.rim.cog, rc.outline and true or false)
+    if w.absorb then
+      w.absorb:show(bar); w.absorb:refresh()
+      cogEnabled(w.absorb.cog, rc.bar and rc.bar.absorb ~= false)
+    end
+    -- layer
+    w.ownLayer:refresh()
+    local own = rc.level ~= nil
+    w.strata:show(own); w.strata:refresh(); w.level:show(own); w.level:refresh()
     w.trackColor:refresh(); w.trackAlpha:refresh()
     local mode = rc.colorMode or "solid"
     w.mode.sync(mode); w.color:refresh()
@@ -671,6 +837,7 @@ local function ringSection(b, sc, key, title, kind)
       w.mid:show(rc.shift and true or false); w.low:show(rc.shift and true or false)
     end
     if w.shieldOn then
+      w.shieldOn:show(not bar)   -- the arc's presence wash; a bar has the absorb overlay instead
       w.shieldOn:refresh()
       cogEnabled(w.shieldOn.cog, rc.shieldTint and true or false)
       if w.shieldOn.cog.popover:isOpen() then w.shieldOn.cog.popover:open() end
@@ -1236,15 +1403,6 @@ end
 -- --------------------------------------------------------------------------
 -- The editor: the accordion's sections in order.
 -- --------------------------------------------------------------------------
-local STRATA = {
-  { "BACKGROUND", "Background", "Behind almost everything." },
-  { "LOW",        "Low",        "Behind most frames." },
-  { "MEDIUM",     "Medium",     "The default. With most addon frames." },
-  { "HIGH",       "High",       "In front of most frames." },
-  { "DIALOG",     "Dialog",     "Above almost everything." },
-}
-local STRATA_LABEL = {}
-for _, s in ipairs(STRATA) do STRATA_LABEL[s[1]] = s[2] end
 
 local function num(field, default)
   return function() local cfg = Cfg(); return cfg and orDefault(cfg[field], default) end

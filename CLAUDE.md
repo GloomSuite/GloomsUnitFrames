@@ -26,7 +26,8 @@ class-resource and cast displays as ARCS of any span, each placeable, sizeable, 
 colourable. Target: **Midnight 12.1** (Interface `120100`), retail only. Built 2026-09-19 in one
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
-The remaining work is Hub BACKLOG items 12 (watching) and 13 (the tab tidy pass); 14 (profiles) and 15 closed 2026-09-20.
+The remaining work is Hub BACKLOG item 12 (watching) and the suite-wide UI REDESIGN (item 16,
+which replaces this tab's look); 13 closed as superseded, 14 and 15 closed 2026-09-20.
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 
@@ -45,6 +46,35 @@ description of the technique; keep it true.** Do not:
 - add a fourth mask to a texture (hard error at login);
 - TRUTH-TEST a secret — functions that may return one return a PLAIN `ok` first (`UnitColor`);
 - expect any script on a frame under an aura button to run, or its `IsShown` to be plain (§20).
+
+## ★ BAR MODE (2026-09-21) — the other renderer, Hub FINDINGS §21
+
+Every display (`rc.mode = "arc" | "bar"`) can be drawn as a straight **StatusBar cut to a
+silhouette** instead of an arc: `SetMinMaxValues(0, secretMax)` + `SetValue(secret)` let the ENGINE
+size the fill — no curves, no chunks — and a `MaskTexture` of the shape on every texture holds
+while it resizes. `NewBar(holder[, detached])` owns: the track, four StatusBar layers (base / grad
+/ mid / low, the same alpha profiles as the arc; grad is a ramp IMAGE so the gradient stays put
+in space; across the fill axis it is `SetGradient` on the base), the absorb overlay (an
+INVISIBLE reverse-filled StatusBar sizing a `SetClipsChildren` frame with a TILED 8 px hatch
+inside — EUI's look, present at full health), the rim (the shape's `-rim[-thin|-thick]` art) or
+four edge textures on a Rectangle, and NO masks at all in Rectangle mode (a mask's clamp fades a
+half-texel). `bar:Configure(bc, outline)` returns the box; the interface mirrors the arc's
+(`SetShown · SetShift · SetColor · SetSolid · SetGradient · SetFromUnit · SetFromPlain ·
+SetFromDuration · Layer · PlaceTick`), so `r.fill` IS whichever renderer is live and Refresh /
+CastTick do not care. Geometry comes from the Hub's BAR-shape family (`ShapeGeometry` / `BarBox`:
+footprint = the box, canvas = the mask, an off-centre set member's offset, rotation about the
+canvas centre; `size` is the footprint's short side — the SET's for a member). Resource = a row
+of detached bars, each `SetWindow(i/n)` (drawn full, alpha-stepped). Cast = `SetTimerDuration`
+from the duration object, once per cast; a target's cast in bar mode is UNTESTED under secrecy.
+Rules measured the hard way: **no `SetTexCoord` on a mask** (flips hide everything → a flip is
+art), **no `SetRotatesTexture` on a masked fill**, **a tiled texture's scale is its FILE size**.
+Per display: `rc.strata` / `rc.level` (nil = the unit's + the automatic band; set = absolute,
+level = the display's LOWEST piece — a bar spans +6, an arc +15, to match Overlays' numbers),
+`rc.outline` / `outlineWidth` / `outlineColor` / `outlineAlpha` (either mode; an arc's is a grown
+arc under the track), and `rc.bar.dx/dy` (the bar's OWN offset — never shared with the arc, the
+owner's ruling). `/gu bar <ring> <shape|rect|off|reset|debug> [size]` + `dir/rot/rim/absorb/
+absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. The tab shows a
+**Drawn as · Arc | Bar** switch per section and swaps the geometry cells.
 
 ## Shape
 
@@ -135,8 +165,9 @@ description of the technique; keep it true.** Do not:
   is the lock**: `SetEditing(which)` on the container's OnShow makes the selected unit draggable
   with a green outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a
   fake 5s cast on repeat (`SetCastPreview`).
-- **`Media/art/`** is GENERATED (Python/PIL; the scripts were throwaway — regenerate from the
-  descriptions in FINDINGS §18 / the engine header): `disc.png` (the default ring art, radius
+- **`Media/art/`** is GENERATED (Python/PIL; the arc scripts were throwaway — regenerate from the
+  descriptions in FINDINGS §18 / the engine header; the bar's `ramp.png` / `ramp-v.png` / `hatch.png`
+  are one-liners described in the engine's BAR section): `disc.png` (the default ring art, radius
   250/256) + `disc-ramp.png` (its gradient companion — a texture takes at most 3 masks, so the
   shape is baked in; custom art wants its own `<name>-ramp`), `halfplane-ccw/cw.png` (exact 180°,
   soft on the leading half of the edge, hard on the trailing), `halfplane-lead-ccw/cw.png` (180° +
