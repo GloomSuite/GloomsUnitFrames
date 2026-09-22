@@ -146,25 +146,25 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   auras you have, so an empty group was invisible while being placed. Its pixel alignment against
   a live group is unverified (BACKLOG 12.3).
 - **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
-  order 50), built on `LibGloomSkin` (`SKIN_NEEDS = 10`; bump in the same commit as any newer call).
-  Rail: the mark, **the PROFILE block** (the suite's `UI.profileBlock`, with `users` for the delete
-  gate), UNITS — Player / Target as plain rows (the ring summary that used to share the line was
-  removed: it collided, and the owner asked what it was even for) — **Copy from the other unit**
-  (everything but position), Reset. Editor: a GB-style accordion — Position · Layer · Visibility ·
-  **Texts** (list + editor, the shortcode list a popover that INSERTS on click) · **Auras** (list +
-  editor; filters behind a cog, its popover titled "FILTERS — BUFFS / DEBUFFS" because the two
-  panels differ; the spell-list boxes render "Name (ID)" and resolve by the ID so a zone debuff's
-  entry survives a round trip) · one section per ring (the resource section only for Player).
-  Number cells (`cNum`) set the Hub's `stepper` so Up / Down apply live. **Every section body is a `UI.grid`** (two cells
-  per line — the 2026-09-20 compaction, Hub BACKLOG 13): the deep clusters (shield tint, interrupt
-  colouring) sit behind `UI.cog` popovers, one-line conditionals (gradient end, drain shift,
-  breakpoint) appear inline under their switch, and a section's `refresh` ends with
-  `sc.height = g:layout() + 8` so the accordion follows. The file's header comment explains the
-  three tiers; the owner called the result "a little messy" and may mock the tidy pass — ask for
-  the mock first. Everything applies live; there is no Save. **The tab
-  is the lock**: `SetEditing(which)` on the container's OnShow makes the selected unit draggable
-  with a green outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a
-  fake 5s cast on repeat (`SetCastPreview`).
+  built on `LibGloomSkin` — `SKIN_NEEDS = 11`; bump in the same commit as any newer call).
+  ★ **MID-REDESIGN (Hub BACKLOG 16).** Stage 1 (2026-09-21) put the kit's shell around it: the
+  PROFILE row is in the Suite window's FOOTER (`RegisterTab`'s `profile = PROFILE_API`, the same
+  api that used to feed the rail's block, with `users` for the delete gate), the banner says
+  gloomUNIT (`wordmark = "UNIT"`), Player / Target are the two Michroma buttons at the top
+  (`BuildTop`) with **Copy from the other unit** and **Reset** at the row's right end (the
+  assistant's placement — the mocks don't show them), the accordion's headers are
+  `UI.sectionHeader` (26px pitch, body 20 under, 28 after), and the **GLOBAL** section (Visibility
+  picker · X / Y scrub dials with the centre mark · Layer picker · Level dial, at the mock's own
+  coordinates x=50/380/634) replaced Position · Layer · Visibility. The left rail is GONE.
+  **Still pre-kit, until stage 2 rebuilds each from its mock:** Texts (list + editor, the shortcode
+  popover) · Auras (list + editor, filters behind a cog) · one section per ring (the resource
+  section only for Player), every body a `UI.grid` with `cNum` / `cToggle` / `cColor` / `cChoice` /
+  `cDropdown` cells and cogs for the deep clusters — drawn through the Hub's transition theme. A
+  section's `refresh` ends with `sc.height = …` so the accordion follows. Everything applies live;
+  there is no Save. **The tab is the lock**: `SetEditing(which)` on the container's OnShow makes
+  the selected unit draggable with a green outline; OnHide locks. While the Cast ring section is
+  open, that unit's ring runs a fake 5s cast on repeat (`SetCastPreview`). The mock's "Unit Frame
+  Default Font" is NOT built — the engine has no per-unit default font yet (stage 2, first item).
 - **`Media/art/`** is GENERATED (Python/PIL; the arc scripts were throwaway — regenerate from the
   descriptions in FINDINGS §18 / the engine header; the bar's `ramp.png` / `ramp-v.png` / `hatch.png`
   are one-liners described in the engine's BAR section): `disc.png` (the default ring art, radius

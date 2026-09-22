@@ -1,14 +1,18 @@
 -- ============================================================
 -- GloomsUnitFrames_Tab.lua
--- The UNIT FRAMES tab of the Suite window, laid out the family way (GB is
--- the reference): a LEFT RAIL (the mark, the PROFILE block, Player / Target
--- as a selectable list, Copy, Reset) and a scrolling RIGHT PANE with the
--- selected unit's settings. No footer: every control applies the moment it
--- moves and the on-screen ring IS the preview. Profiles are per character
--- like GB's (the owner, 2026-09-20 — the tool shipped account-wide and he
--- ruled that wrong); the engine holds the plumbing, this file only drives
--- the shared UI.profileBlock. Every widget comes from LibGloomSkin-1.0; the
--- engine (GloomsUnitFrames.lua) exposes what this file drives.
+-- The UNIT FRAMES tab of the Suite window. ★ MID-REDESIGN (Hub BACKLOG 16):
+-- stage 1 (2026-09-21) put the KIT's shell around it — the PROFILE row lives
+-- in the Suite window's footer (RegisterTab's `profile`), the tool's wordmark
+-- in its banner, Player / Target are the two big Michroma buttons at the top,
+-- the section headers are the kit's, and the GLOBAL section (visibility,
+-- position, layer) is built from the kit's dials and pickers as the proof.
+-- The other sections still wear the pre-kit widgets until stage 2 rebuilds
+-- them from the owner's seven Unit Frames mocks. The left rail is gone.
+-- No Save: every control applies the moment it moves and the on-screen ring
+-- IS the preview. Profiles are per character like GB's (the owner,
+-- 2026-09-20); the engine holds the plumbing. Every widget comes from
+-- LibGloomSkin-1.0; the engine (GloomsUnitFrames.lua) exposes what this
+-- file drives.
 --
 -- LAYOUT (the 2026-09-19 compaction, Hub BACKLOG item 13). The owner: EUI
 -- "compacts the settings panels into dropdowns and side-by-side display,
@@ -26,8 +30,9 @@
 
 -- ★ SHARED-TOOLKIT VERSION GATE — GloomsHub/docs/CONTRACTS.md §6. Bump
 -- SKIN_NEEDS in the same commit that first calls a newer widget.
--- This file needs UI.grid / UI.popover / UI.cog (MINOR 9).
-local SKIN_MAJOR, SKIN_NEEDS = "LibGloomSkin-1.0", 10
+-- This file needs the kit — UI.button / dial / pick / sectionHeader and
+-- RegisterTab's `profile` footer (MINOR 11).
+local SKIN_MAJOR, SKIN_NEEDS = "LibGloomSkin-1.0", 11
 
 local Skin, skinMinor = LibStub(SKIN_MAJOR, true)
 if not Skin or (skinMinor or 0) < SKIN_NEEDS then
@@ -59,13 +64,12 @@ UI.RegisterWarmPairs({
   { FONT.head, 22 },   -- the ring's centre text, at its default size
 })
 
-local RAIL_W     = 240
 local PAD        = 18
+local TOP_H      = 86   -- the Player / Target row: 20 above, 36 tall, 30 below (the mocks)
 local LIST_ROW_H = 30
 
-local container, rail, editorScroll, editorChild, editorBody, emptyNote
+local container, editorScroll, editorChild, editorBody, emptyNote
 local selected
-local rows = {}
 local E = {}
 local RefreshList, SelectUnit, RefreshEditor
 
@@ -240,92 +244,77 @@ end
 -- --------------------------------------------------------------------------
 -- LEFT RAIL
 -- --------------------------------------------------------------------------
-local function BuildRail(c)
-  rail = CreateFrame("Frame", nil, c)
-  rail:SetPoint("TOPLEFT", 0, 0); rail:SetPoint("BOTTOMLEFT", 0, 0)
-  rail:SetWidth(RAIL_W)
-  local X, W = 14, RAIL_W - 28
+-- PROFILE: the suite's one profile control — since stage 1 of the redesign
+-- the Suite window draws it in its FOOTER from this api (RegisterTab's
+-- `profile`); the same api used to feed UI.profileBlock in the rail. The
+-- library is account-wide and each character remembers which one it uses;
+-- the engine holds the plumbing.
+local function collision() return false, "A profile with that name already exists." end
+local PROFILE_API = {
+  noun   = "profile",
+  names  = function() return GU:ProfileNames() end,
+  active = function() return GU:ActiveProfileName() or "?" end,
+  switch = function(v) GU:SetActiveProfile(v) end,
+  users  = function(name) return GU:ProfileUsers(name) end,
+  create = function(name)
+    if not GU:CreateProfile(name) then return collision() end
+    GU:SetActiveProfile(name); return true
+  end,
+  copy = function(name)
+    if not GU:CopyProfile(GU:ActiveProfileName(), name) then return collision() end
+    GU:SetActiveProfile(name); return true
+  end,
+  rename = function(name)
+    if not GU:RenameProfile(GU:ActiveProfileName(), name) then return collision() end
+    return true
+  end,
+  delete = function()
+    local gone = GU:ActiveProfileName()
+    local ok, landedOn = GU:DeleteProfile(gone)
+    if not ok then return false, "Can't delete the last profile." end
+    -- The note line clears on success, so where this character went goes to chat.
+    print(("|cff936bffGloom's Unit Frames:|r deleted profile |cffffffff%s|r — this character is now on |cffffffff%s|r.")
+      :format(gone, tostring(landedOn)))
+    return true
+  end,
+  onChange = function() RefreshEditor(); RefreshList() end,
+  tips = {
+    dropdown = "The active profile for this character. Each character remembers its own; the profile library is shared account-wide.",
+    new      = "Creates a profile with the factory rings, texts and aura groups, and switches to it. To start from THIS look instead, use Copy.",
+    copy     = "Duplicates this profile — both units, everything — and switches to the copy.",
+    rename   = "Renames this profile. Characters using it follow the new name.",
+    delete   = "Deletes this profile (you'll be asked to confirm). Characters using it fall back to another profile. The last profile can't be deleted.",
+  },
+}
 
-  UI.tabHeader(rail, {
-    texture = "Interface\\AddOns\\GloomsUnitFrames\\Media\\ui\\logo.png",
-    label   = "GLOOM'S UNIT FRAMES",
-    x       = X,
-  })
-
-  -- PROFILE: the suite's one profile control (LibGloomSkin MINOR 3), the
-  -- same block GB / GA / Overlays carry. The library is account-wide and each
-  -- character remembers which one it uses; the engine holds the plumbing.
-  local function collision() return false, "A profile with that name already exists." end
-  local profBlock = UI.profileBlock(rail, W, {
-    noun   = "profile",
-    names  = function() return GU:ProfileNames() end,
-    active = function() return GU:ActiveProfileName() or "?" end,
-    switch = function(v) GU:SetActiveProfile(v) end,
-    users  = function(name) return GU:ProfileUsers(name) end,
-    create = function(name)
-      if not GU:CreateProfile(name) then return collision() end
-      GU:SetActiveProfile(name); return true
-    end,
-    copy = function(name)
-      if not GU:CopyProfile(GU:ActiveProfileName(), name) then return collision() end
-      GU:SetActiveProfile(name); return true
-    end,
-    rename = function(name)
-      if not GU:RenameProfile(GU:ActiveProfileName(), name) then return collision() end
-      return true
-    end,
-    delete = function()
-      local gone = GU:ActiveProfileName()
-      local ok, landedOn = GU:DeleteProfile(gone)
-      if not ok then return false, "Can't delete the last profile." end
-      -- The note line clears on success, so where this character went goes to chat.
-      print(("|cff936bffGloom's Unit Frames:|r deleted profile |cffffffff%s|r — this character is now on |cffffffff%s|r.")
-        :format(gone, tostring(landedOn)))
-      return true
-    end,
-    onChange = function() RefreshEditor(); RefreshList() end,
-    tips = {
-      dropdown = "The active profile for this character. Each character remembers its own; the profile library is shared account-wide.",
-      new      = "Creates a profile with the factory rings, texts and aura groups, and switches to it. To start from THIS look instead, use Copy.",
-      copy     = "Duplicates this profile — both units, everything — and switches to the copy.",
-      rename   = "Renames this profile. Characters using it follow the new name.",
-      delete   = "Deletes this profile (you'll be asked to confirm). Characters using it fall back to another profile. The last profile can't be deleted.",
-    },
-  })
-  profBlock.frame:SetPoint("TOPLEFT", X, -60)
-  E.profBlock = profBlock
-  local unitsTop = 60 + profBlock.height + 14   -- the UNITS list sits under the block
-
-  local oh = newText(rail, FONT.head, 12, MUTE, "LEFT")
-  oh:SetPoint("TOPLEFT", X, -unitsTop); oh:SetText("UNITS")
-
+-- The top row (the mocks): Player / Target as the two big Michroma buttons,
+-- the chosen one violet. Copy-from and Reset sit at the row's right end —
+-- ★ the mocks do not show them; this placement is the assistant's, to be
+-- confirmed against the stage-2 screens.
+local function BuildTop(c)
+  local top = CreateFrame("Frame", nil, c)
+  top:SetPoint("TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", 0, 0); top:SetHeight(TOP_H)
+  E.unitBtns = {}
   for i, which in ipairs(GU.UNITS) do
-    local row = CreateFrame("Button", nil, rail)
-    row:SetSize(W, LIST_ROW_H)
-    row:SetPoint("TOPLEFT", X, -(unitsTop + 18) - (i - 1) * LIST_ROW_H)
-    row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetAllPoints()
-    row.sel:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.28); row.sel:Hide()
-    local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.07)
-    -- Just the name. A right-aligned "which rings are on" summary used to
-    -- share the line and collided with it; the owner asked what it was even
-    -- for (2026-09-20) — the editor says the same thing one click away.
-    row.text = newText(row, FONT.body, 12, TEXT, "LEFT"); row.text:SetPoint("LEFT", 8, 0)
-    row.text:SetText(UNIT_LABEL[which])
-    row:SetScript("OnClick", function() SelectUnit(which) end)
-    rows[which] = row
+    local b = UI.button(top, UNIT_LABEL[which], { font = FONT.mark, size = 14, h = 36, w = 150, caps = false, kind = "quiet",
+      onClick = function() SelectUnit(which) end })
+    b:SetPoint("TOPLEFT", 20 + (i - 1) * 170, -20)
+    E.unitBtns[which] = b
   end
+  attachTip(E.unitBtns.player, "Player", "While this tab is open, the selected unit's ring can be dragged on screen. The green outline is its frame.")
+  attachTip(E.unitBtns.target, "Target", "The target ring shows empty until you have a target. While this tab is open it can be dragged on screen.")
 
-  local hint = newText(rail, FONT.body, 10.5, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", X, -(unitsTop + 18) - 2 * LIST_ROW_H - 10)
-  hint:SetPoint("TOPRIGHT", -X, -(unitsTop + 18) - 2 * LIST_ROW_H - 10)
-  hint:SetJustifyH("LEFT")
-  hint:SetText("While this tab is open, the selected unit's ring can be dragged on screen. "
-    .. "The green outline is its frame; the target ring shows empty until you have a target.")
+  E.resetBtn = UI.button(top, "Reset to defaults", { kind = "warn", onClick = function()
+    local which = selected
+    if not which then return end
+    UI.confirm(("Reset the %s frame to its factory position, size and rings?"):format(UNIT_LABEL[which]:lower()),
+      function() GU:Reset(which); RefreshEditor(); RefreshList() end)
+  end })
+  E.resetBtn:SetPoint("RIGHT", top, "TOPRIGHT", -20, -38)
+  attachTip(E.resetBtn, "Reset to defaults", "Puts the selected unit back where a fresh install would have it. Asks first.")
 
   -- Copy the other unit's settings (everything but position) onto this one.
-  E.copyBtn = flatButton(rail, W, 22, COLOR.heroic, "Copy from Target", 11)
-  E.copyBtn:SetBase(0.2); E.copyBtn:SetPoint("BOTTOMLEFT", X, 34)
-  E.copyBtn:SetScript("OnClick", function()
+  E.copyBtn = UI.button(top, "Copy from Target", { kind = "action", onClick = function()
     local which = selected
     if not which then return end
     local from = (which == "player") and "target" or "player"
@@ -334,42 +323,35 @@ local function BuildRail(c)
       GU:CopyFrom(which, from)
       RefreshEditor(); RefreshList()
     end)
-  end)
+  end })
+  E.copyBtn:SetPoint("RIGHT", E.resetBtn, "LEFT", -6, 0)
   attachTip(E.copyBtn, "Copy from the other unit",
     "Layer, visibility, text and every ring the two share — sizes, angles, colors, rounding. Position is left alone.")
-
-  E.resetBtn = flatButton(rail, W, 22, COLOR.heroic, "Reset to defaults", 11)
-  E.resetBtn:SetBase(0.2); E.resetBtn:SetPoint("BOTTOMLEFT", X, 6)
-  E.resetBtn:SetScript("OnClick", function()
-    local which = selected
-    if not which then return end
-    UI.confirm(("Reset the %s frame to its factory position, size and rings?"):format(UNIT_LABEL[which]:lower()),
-      function() GU:Reset(which); RefreshEditor(); RefreshList() end)
-  end)
-  attachTip(E.resetBtn, "Reset to defaults", "Puts the selected unit back where a fresh install would have it. Asks first.")
 end
 
 RefreshList = function()
   for _, which in ipairs(GU.UNITS) do
-    local row = rows[which]
-    if row then row.sel:SetShown(which == selected) end
+    local b = E.unitBtns and E.unitBtns[which]
+    if b then b:SetActive(which == selected) end
   end
-  if E.profBlock then E.profBlock:refresh() end
   if E.resetBtn then E.resetBtn:SetEnabled(selected ~= nil) end
   if E.copyBtn then
     E.copyBtn:SetEnabled(selected ~= nil)
-    E.copyBtn.text:SetText(selected == "target" and "Copy from Player" or "Copy from Target")
+    E.copyBtn:SetLabel(selected == "target" and "Copy from Player" or "Copy from Target")
   end
 end
 
 -- --------------------------------------------------------------------------
--- The accordion (GB's is the reference): 36px headers — orange caret, Khand
--- purple title, hairline under — one section open at a time, stack reflows.
+-- The accordion: the kit's section headers (a violet triangle + Play Bold 14
+-- violet title at x=20), one section open at a time, the stack reflows. The
+-- mocks' spacing: a closed header takes 26 (16 + 10); an open one's body
+-- starts 20 under it and the next header sits 28 under the body.
 -- A section's `refresh` re-syncs its widgets AND may change its height (the
 -- grids restack), so makeSection wraps it to relayout afterwards: every
 -- handler in a section body calls sc.refresh() and nothing else.
 -- --------------------------------------------------------------------------
-local SECTION_HDR_H = 36
+local SECTION_HDR_H = 26
+local BODY_GAP_TOP, BODY_GAP_BOTTOM = 10, 28   -- 10 on top of the header's own 10 → 20
 local sections = {}
 local bodyContainer
 
@@ -384,7 +366,7 @@ local function relayout()
       sc.header:SetPoint("TOPLEFT", bodyContainer, "TOPLEFT", 0, 0)
       sc.header:SetPoint("TOPRIGHT", bodyContainer, "TOPRIGHT", 0, 0)
     end
-    sc.caret:SetRotation(sc.open and UI.CARET_DOWN or 0)
+    sc.header.button:SetOpen(sc.open)
     if sc.hidden then
       sc.header:Hide(); sc.body:Hide()
     else
@@ -392,12 +374,12 @@ local function relayout()
       total = total + SECTION_HDR_H
       if sc.open then
         sc.body:ClearAllPoints()
-        sc.body:SetPoint("TOPLEFT", sc.header, "BOTTOMLEFT", 0, 0)
-        sc.body:SetPoint("TOPRIGHT", sc.header, "BOTTOMRIGHT", 0, 0)
-        sc.body:SetHeight(sc.height)
+        sc.body:SetPoint("TOPLEFT", sc.header, "BOTTOMLEFT", 0, -BODY_GAP_TOP)
+        sc.body:SetPoint("TOPRIGHT", sc.header, "BOTTOMRIGHT", 0, -BODY_GAP_TOP)
+        sc.body:SetHeight(sc.height + BODY_GAP_BOTTOM)
         sc.body:Show()
         prevBottom = sc.body
-        total = total + sc.height
+        total = total + sc.height + BODY_GAP_TOP + BODY_GAP_BOTTOM
       else
         sc.body:Hide()
         prevBottom = sc.header
@@ -441,22 +423,14 @@ end
 
 local function makeSection(title, height, build)
   local sc = { title = title, height = height, open = false }
-  local header = CreateFrame("Button", nil, bodyContainer)
+  local header = CreateFrame("Frame", nil, bodyContainer)   -- the row; the kit header is its click target
   header:SetHeight(SECTION_HDR_H)
-  local hover = header:CreateTexture(nil, "BACKGROUND"); hover:SetAllPoints(); hover:SetColorTexture(1, 1, 1, 0.05); hover:Hide()
-  header:SetScript("OnEnter", function() hover:Show() end)
-  header:SetScript("OnLeave", function() hover:Hide() end)
-  local caret = header:CreateTexture(nil, "ARTWORK"); caret:SetTexture(UI.CARET)
-  caret:SetVertexColor(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b)
-  caret:SetSize(9, 9); caret:SetPoint("LEFT", PAD, 0)
-  local h = newText(header, FONT.head, 16, COLOR.purple, "LEFT")
-  h:SetPoint("LEFT", caret, "RIGHT", 11, -1); h:SetText(title:upper())
-  local div = header:CreateTexture(nil, "ARTWORK"); div:SetColorTexture(COLOR.rim.r, COLOR.rim.g, COLOR.rim.b, COLOR.rim.a or 0.1)
-  div:SetHeight(1); div:SetPoint("BOTTOMLEFT", 0, 0); div:SetPoint("BOTTOMRIGHT", 0, 0)
+  header.button = UI.sectionHeader(header, title, { onToggle = function() toggleSection(sc) end })
+  header.button:SetPoint("TOPLEFT", 20, 0)
   local body = CreateFrame("Frame", nil, bodyContainer)
   body:SetHeight(height); body:Hide()
-  sc.header, sc.caret, sc.body = header, caret, body
-  header:SetScript("OnClick", function() toggleSection(sc) end)
+  sc.header, sc.body = header, body
+  function sc:SetTitle(t) self.header.button.text:SetText(tostring(t):upper()) end
   build(body, sc)
   local inner = sc.refresh
   if inner then sc.refresh = function() inner(); relayout() end end
@@ -1415,16 +1389,37 @@ local function BuildEditor(p)
   bodyContainer = CreateFrame("Frame", nil, p)
   bodyContainer:SetPoint("TOPLEFT", 0, 0); bodyContainer:SetPoint("TOPRIGHT", 0, 0)
 
-  E.posSec = makeSection("Position", 60, function(b, sc)
-    local g = UI.grid(b, -8)
-    E.xRow = cNum(g, "X", -700, 700, num("x", 0), setUnit("x"))
-    E.yRow = cNum(g, "Y", -400, 400, num("y", 0), setUnit("y"))
-    sc.refresh = function() E.xRow:refresh(); E.yRow:refresh(); sc.height = g:layout() + 8 end
-  end)
-
-  E.layerSec = makeSection("Layer", 60, function(b, sc)
-    local g = UI.grid(b, -8)
-    E.strata = cDropdown(g, "Layer", 150,
+  -- GLOBAL (the mocks' "Global Player Settings"): visibility, position,
+  -- layer — at the mocks' own coordinates (three columns at x=50 / 380 /
+  -- 634, rows 55 apart), built from the kit as stage 1's proof. The mocks
+  -- also show a "Unit Frame Default Font" picker here; the engine has no
+  -- such setting yet (each text piece picks its own font), so it is stage 2's.
+  local function kitPick(b, x, y, labelText, w, getLabel, getOptions, getCurrent, onPick, tip)
+    local lab = UI.label(b, labelText); lab:SetPoint("TOPLEFT", x, y)
+    local pk = UI.pick(b, w, getLabel, getOptions, getCurrent, onPick)
+    pk:SetPoint("TOPLEFT", x, y - 18)
+    if tip then attachTip(pk, labelText, tip) end
+    return pk
+  end
+  E.globalSec = makeSection("Global player settings", 90, function(b, sc)
+    E.cond = kitPick(b, 50, 0, "Visibility", 270,
+      function() local cfg = Cfg(); return cfg and COND_LABEL[cfg.showCondition or "always"] or "Always" end,
+      function()
+        return {
+          { label = "Always", value = "always" }, { label = "In combat", value = "combat" },
+          { label = "Show when target is selected", value = "target" }, { label = "Combat or target", value = "combat_or_target" },
+        }
+      end,
+      function() local cfg = Cfg(); return cfg and (cfg.showCondition or "always") end,
+      function(v) GU:SetCondition(selected, v); RefreshList() end,
+      "Always (the target ring still needs a target) · only in combat · only with a target · either.")
+    E.xDial = UI.dial(b, { label = "Horizontal Position (X)", min = -700, max = 700, step = 1, unit = "px", centre = true,
+      get = num("x", 0), set = setUnit("x") })
+    E.xDial:SetPoint("TOPLEFT", 380, 0)
+    E.yDial = UI.dial(b, { label = "Vertical Position (Y)", min = -400, max = 400, step = 1, unit = "px", centre = true,
+      get = num("y", 0), set = setUnit("y") })
+    E.yDial:SetPoint("TOPLEFT", 380, -55)
+    E.strata = kitPick(b, 634, 0, "Layer (Z)", 120,
       function() local cfg = Cfg(); return cfg and STRATA_LABEL[cfg.strata or "MEDIUM"] or "Medium" end,
       function()
         local opts = {}
@@ -1434,25 +1429,13 @@ local function BuildEditor(p)
       function() local cfg = Cfg(); return cfg and (cfg.strata or "MEDIUM") end,
       function(v) GU:SetStrata(selected, v) end,
       "Background is behind almost everything; Dialog above almost everything. Medium — the default — sits with most addon frames.")
-    E.level = cNum(g, "Level within the layer", 0, 200, num("level", 10), setUnit("level"),
-      "higher draws in front — use it to tuck a ring behind or in front of an overlay on the same layer")
-    sc.refresh = function() E.strata:refresh(); E.level:refresh(); sc.height = g:layout() + 8 end
-  end)
-
-  E.visSec = makeSection("Visibility", 44, function(b, sc)
-    local g = UI.grid(b, -8)
-    E.cond = cDropdown(g, "Show", 170,
-      function() local cfg = Cfg(); return cfg and COND_LABEL[cfg.showCondition or "always"] or "Always" end,
-      function()
-        return {
-          { label = "Always", value = "always" }, { label = "In combat", value = "combat" },
-          { label = "Target selected", value = "target" }, { label = "Combat or target", value = "combat_or_target" },
-        }
-      end,
-      function() local cfg = Cfg(); return cfg and (cfg.showCondition or "always") end,
-      function(v) GU:SetCondition(selected, v); RefreshList() end,
-      "Always (the target ring still needs a target) · only in combat · only with a target · either.")
-    sc.refresh = function() E.cond:refresh(); sc.height = g:layout() + 8 end
+    E.level = UI.dial(b, { label = "Level Within Layer", min = 0, max = 200, step = 1, get = num("level", 10), set = setUnit("level") })
+    E.level:SetPoint("TOPLEFT", 634, -55)
+    attachTip(E.level.strip, "Level within the layer", "Higher draws in front — use it to tuck a ring behind or in front of an overlay on the same layer. Drag anywhere on the ticks; the wheel steps it; click the number to type.")
+    sc.refresh = function()
+      E.cond:refresh(); E.strata:refresh(); E.xDial:refresh(); E.yDial:refresh(); E.level:refresh()
+      sc.height = 90
+    end
   end)
 
   E.textsSec = makeSection("Texts", 300, function(b, sc) textsSection(b, sc) end)
@@ -1466,7 +1449,7 @@ local function BuildEditor(p)
   E.resourceSec = ringBody("Class resource ring", "resource", "resource")
   E.castSec     = ringBody("Cast ring",           "cast",     "cast")
 
-  E.posSec.open = true
+  E.globalSec.open = true
   relayout()
 end
 
@@ -1481,7 +1464,8 @@ RefreshEditor = function()
   if emptyNote then emptyNote:Hide() end
   editorBody:Show(); E.editorBar:Show()
   E.resourceSec.hidden = (cfg.rings.resource == nil)
-  if E.resourceSec.hidden and E.resourceSec.open then E.resourceSec.open = false; E.posSec.open = true end
+  if E.resourceSec.hidden and E.resourceSec.open then E.resourceSec.open = false; E.globalSec.open = true end
+  E.globalSec:SetTitle(("Global %s settings"):format(UNIT_LABEL[selected] or ""))
   for _, sc in ipairs(sections) do if sc.open and sc.refresh then sc.refresh() end end
   relayout()
 end
@@ -1499,16 +1483,11 @@ end
 -- --------------------------------------------------------------------------
 local function BuildTab(c)
   container = c
-  BuildRail(c)
-
-  local vdiv = c:CreateTexture(nil, "ARTWORK")
-  vdiv:SetColorTexture(COLOR.rim.r, COLOR.rim.g, COLOR.rim.b, COLOR.rim.a or 0.1)
-  vdiv:SetWidth(1)
-  vdiv:SetPoint("TOPLEFT", RAIL_W, 0); vdiv:SetPoint("BOTTOMLEFT", RAIL_W, 0)
+  BuildTop(c)
 
   editorScroll = CreateFrame("ScrollFrame", nil, c)
-  editorScroll:SetPoint("TOPLEFT", RAIL_W + 1, -1)
-  editorScroll:SetPoint("BOTTOMRIGHT", -10, 1)
+  editorScroll:SetPoint("TOPLEFT", 0, -TOP_H)
+  editorScroll:SetPoint("BOTTOMRIGHT", -24, 1)
   editorScroll:EnableMouseWheel(true)
   editorScroll:SetScript("OnMouseWheel", function(self, delta)
     local range = self:GetVerticalScrollRange()
@@ -1519,15 +1498,15 @@ local function BuildTab(c)
   editorScroll:SetScrollChild(editorChild)
   editorScroll:SetScript("OnSizeChanged", function(_, w) if w and w > 0 then editorChild:SetWidth(w) end end)
   E.editorBar = makeScrollbar(c, editorScroll, function(b)
-    b:SetPoint("TOPRIGHT", -4, -2); b:SetPoint("BOTTOMRIGHT", -4, 2)
-  end)
+    b:SetPoint("TOPRIGHT", -8, -TOP_H); b:SetPoint("BOTTOMRIGHT", -8, 2)
+  end, { kit = true })
 
   editorBody = CreateFrame("Frame", nil, editorChild)
   editorBody:SetAllPoints()
   BuildEditor(editorBody)
   editorBody:Hide()
 
-  emptyNote = newText(c, FONT.body, 12, MUTE, "CENTER")
+  emptyNote = newText(c, FONT.ui, 12, COLOR.ink, "CENTER")
   emptyNote:SetPoint("CENTER", editorScroll, "CENTER", 0, 0)
   emptyNote:SetText("Select Player or Target on the left to edit that frame.")
 
@@ -1547,16 +1526,20 @@ local function BuildTab(c)
       return
     end
     if which ~= selected then return end
-    if what == "position" and E.xRow then E.xRow:refresh(); E.yRow:refresh() end
+    if what == "position" and E.xDial then E.xDial:refresh(); E.yDial:refresh() end
   end)
 
   SelectUnit("player")
 end
 
--- Order 50: after Portraits (40), before Media (90).
+-- The Suite window orders the strip itself (the mocks' order); `order` is the
+-- fallback. `wordmark` is what the banner shows after "gloom"; `profile` puts
+-- the profile row in the window's footer (LibGloomSkin MINOR 11).
 GloomsHub:RegisterTab{
-  id    = "unitframes",
-  title = "UNIT FRAMES",
-  order = 50,
-  build = BuildTab,
+  id       = "unitframes",
+  title    = "UNIT FRAMES",
+  order    = 50,
+  wordmark = "UNIT",
+  profile  = PROFILE_API,
+  build    = BuildTab,
 }
