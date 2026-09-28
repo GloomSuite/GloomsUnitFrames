@@ -1006,7 +1006,13 @@ local function NewBar(holder, detached)
         -- jagged rim. Under ~192 px on screen the SMALL variant (`-base-s`, a
         -- quarter size, resampled so the edge carries anti-aliasing) draws
         -- clean; the full art keeps its crispness for big shapes.
-        local part = (math.max(cw, ch) < 192) and "base-s" or "base"
+        -- ★ Measured in SCREEN PIXELS, not UI units (fixed 2026-09-27): the test
+        -- was `< 192` units, and on the owner's 4K a unit is ~2 px — so an orb
+        -- of Size 96 (a 191-unit canvas) stretched the 128 px small mask ~3x
+        -- and went soft, while Size 97 took the full art and was sharp.
+        local _, physH = GetPhysicalScreenSize()
+        local pxPerUnit = ((physH and physH > 0) and (physH / 768) or 1) * (fr:GetEffectiveScale() or 1)
+        local part = (math.max(cw, ch) * pxPerUnit < 192) and "base-s" or "base"
         local base = bc.shape ~= "rect" and hub and hub:BarShapeAsset(bc.shape, part) or "Interface\\Buttons\\WHITE8x8"
         local rot = math.rad(bc.rotation or 0)
         -- ★ No SetTexCoord on a mask: flipped coordinates (either form) make
@@ -2305,6 +2311,10 @@ ev:SetScript("OnEvent", function(_, event, unit)
     if event == "PLAYER_LOGIN" then
         GloomsUnitFramesDB = GloomsUnitFramesDB or {}
         root = GloomsUnitFramesDB
+        -- Colors set to "Use Class Color" take THIS character's class, in every
+        -- profile, before anything applies them (the Hub's kit). The fill and
+        -- text colors' own Class / Power / Resource sources follow the UNIT live.
+        if GloomsHub and GloomsHub.UI and GloomsHub.UI.StampClassColors then GloomsHub.UI.StampClassColors(root) end
         if root._version == 1 or (root._version == nil and root.player) then
             -- v1 was ONE account-wide config { player, target }. It becomes the
             -- first profile, "Default", and every character keeps landing on it

@@ -27,7 +27,7 @@ colourable. Target: **Midnight 12.1** (Interface `120100`), retail only. Built 2
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
 The remaining work is Hub BACKLOG item 12 (watching) and the suite-wide UI REDESIGN (item 16,
-which replaces this tab's look); 13 closed as superseded, 14 and 15 closed 2026-09-20.
+which replaces this tab's look — done 2026-09-27, the two-window windows); 13 closed as superseded, 14 and 15 closed 2026-09-20.
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 
@@ -152,36 +152,31 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   flow layout is given, while the tab's Auras section is open — the engine only draws buttons for
   auras you have, so an empty group was invisible while being placed. Its pixel alignment against
   a live group is unverified (BACKLOG 12.3).
-- **`GloomsUnitFrames_Tab.lua` — the UNIT FRAMES tab** (`GloomsHub:RegisterTab`, id `unitframes`,
-  built on `LibGloomSkin` — `SKIN_NEEDS = 12`; bump in the same commit as any newer call).
-  ★ **ON THE KIT since redesign stage 2 (2026-09-21, Hub BACKLOG 16 — the design decisions live
-  THERE).** The PROFILE row is in the Suite window's FOOTER (`RegisterTab`'s `profile =
-  PROFILE_API`), the banner says gloomUNIT, Player / Target are the two Michroma buttons at the top
-  (`BuildTop`) with Copy-from / Reset at the row's right. Every section is built from its Figma
-  mock at the mock's own body-relative x/y (never a grid): **Global** (`kitPick`s + dials: Visibility
-  incl. **Never** — the frame hides and every other header dims — the unit's **default text font**
-  `cfg.font`, X / Y, Layer, Level) · the four rings through ONE `kitRingSection(b, sc, key, title,
-  kind)`: every widget is built once and `place`d by the live face in `sc.refresh` — the BAR face
-  from the Health mock, the ARC face from the Power mock — with the ring's extras (Health: absorb
-  overlay / shield tint + fade; Resource: gap, points-run, breakpoint; Cast: Channels Drain, Color
-  by Interrupt State and the five interrupt-colour chips with descriptions) and the Layer Override
-  plate (OFF|ON · Layer · Level field); the fill colour is a `UI.chip` whose picker offers the unit's
-  colour SOURCE ("Use Class / Power / Resource Color" → `classColor / powerColor / resourceColor`);
-  `GU.PowerTypeColor` / `GU:ResourceColor()` feed the swatch preview · **Texts** (`textsSection`:
-  "Text N" rows with the TEMPLATE inline in a white field, EDIT / EDITING, ADD TEXT · DUPLICATE ·
-  DELETE (confirmed), the SHORTCODE list on the panel — every `[code]` its own link — and the
-  editor with "(Text N)" labels, the Font Color chip carrying the class source, the Layer plate) ·
-  **Auras** (`aurasSection`: "Group N" rows with a NAME field (`ac.name`, cosmetic), BUFFS | DEBUFFS,
-  Icon Shape, dials, the two Grow Direction bars, Display Order, the **Filters** button opening the
-  kit popover with the class tri-states + Only Timed — **the spell-ID lists are gone**, the owner
-  2026-09-21 — and the Layer plate; the mock has no "dark edge" control, the saved value applies).
-  Disabled-by-another-setting = 50%, never hidden; hidden only for the other mode's face. A
-  section's `refresh` ends with `sc.height = …` so the accordion follows; collapsing the open
-  section scrolls to the top. Everything applies live; there is no Save. **The tab is the lock**:
-  `SetEditing(which)` on the container's OnShow makes the selected unit draggable with a green
-  outline; OnHide locks. While the Cast ring section is open, that unit's ring runs a fake 5s cast
-  on repeat (`SetCastPreview`). The old pre-kit `ringSection` / `listBlock` are deleted; the
-  `UI.grid` cell helpers (`cNum` … `cNote`) remain only for the filter popover's Only Timed row.
+- **`GloomsUnitFrames_Pages.lua` — the UNIT FRAMES WINDOWS** (★ the TWO-WINDOW design, 2026-09-27,
+  from the Figma page "GloomSuite UI 3", frames "gloomUnits, …" + "Shortcodes Popup"; `SKIN_NEEDS =
+  17`). `RegisterTab{ windows = true, selector (h = 105), tab, sections }` — the Hub's `Windows.lua`
+  draws the windows (Hub BACKLOG 16 has the decisions, CONTRACTS §2/§4 the API). The selector is
+  Player | Target; the tab "gloomUNITS: <unit>"; seven sections: **Global <Unit> Settings** (Visibility
+  incl. Never — the other headers dim — default font, X / Y, Strata, Level, Copy Settings from the
+  other unit, Reset to Defaults) · **Texts** (rows: "Text N", the template in a field, EDIT / EDITING in
+  lime; Add · Duplicate · Delete; the lime "View Shortcodes" link opens the SHORTCODES popup — a code
+  clicked goes into the template being edited at its cursor) · **Auras** (rows + the same buttons; the
+  Filters dropdown opens the FILTERS popup: Only Timed + each class Never | Any | Only) · the four
+  rings from ONE builder (`buildRing`) as a LIST OF ROWS per face laid by `flow` (rows 41 apart,
+  GAP = a block's 30) — the mocks' faces are literal (Health / Cast = bar, Power / Resource = arc).
+  A rectangle bar shows Width / Height where a shape shows Size; Rounded Fill (arc-only) dims on a
+  bar. Fill and font colors keep their own Class / Power / Resource SOURCES (they follow the UNIT);
+  every other color offers the suite's "Use Class Color" (stamped at login in the engine). Labels
+  carry "(Text N)" / "(Group N)" in lime. The Class Resource section is `hidden` for classes without
+  one. The lock and previews: while the windows are open the selected unit is draggable; the cast
+  preview runs while the Cast section is on screen, the aura preview while Auras is.
+  ⚠ **`GloomsUnitFrames_Tab.lua` (the first design's tab) is OUT OF THE TOC** — delete it once the
+  owner approves the windows.
+- **Trap fixed in the tab, worth knowing:** a setting getter must test `== nil`, never `v or
+  default` — an OFF switch (`false`) would read as its default and stick.
+- **A bar shape's mask is chosen in SCREEN PIXELS** (`bar:Configure`, fixed 2026-09-27): the small
+  `-base-s` mask under 192 px on screen, the full art above. It was compared in UI units and went
+  soft on the owner's 4K (Hub FINDINGS §21). A bar's gradient takes only four angles — BACKLOG 18.
 - **`Media/art/`** is GENERATED (Python/PIL; the arc scripts were throwaway — regenerate from the
   descriptions in FINDINGS §18 / the engine header; the bar's `ramp.png` / `ramp-v.png` / `hatch.png`
   are one-liners described in the engine's BAR section): `disc.png` (the default ring art, radius
@@ -193,8 +188,6 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   that percent of the diameter, centred — the shield wash picks the one matching the arc's chord;
   512² RGBA, alpha = ramp × disc coverage at radius 500 px, 4× supersampled edge). **The Gu mark
   (`Media/ui/logo.png`) is still the Hub's logo — owed.**
-- **Trap fixed in the tab, worth knowing:** a setting getter must test `== nil`, never `v or
-  default` — an OFF switch (`false`) would read as its default and stick.
 
 ## Conventions
 - Namespace `GloomsUnitFrames` → `_G.GloomsUnitFrames`; frames `GloomsUnitFrames_*`; slash

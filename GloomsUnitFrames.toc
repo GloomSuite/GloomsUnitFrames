@@ -11,4 +11,4 @@
 GloomsUnitFrames.lua
 GloomsUnitFrames_Text.lua
 GloomsUnitFrames_Auras.lua
-GloomsUnitFrames_Tab.lua
+GloomsUnitFrames_Pages.lua
