@@ -70,9 +70,28 @@ Rules measured the hard way: **no `SetTexCoord` on a mask** (flips hide everythi
 art), **no `SetRotatesTexture` on a masked fill**, **a tiled texture's scale is its FILE size**.
 Per display: `rc.strata` / `rc.level` (nil = the unit's + the automatic band; set = absolute,
 level = the display's LOWEST piece — a bar spans +6, an arc +15, to match Overlays' numbers),
-`rc.outline` / `outlineWidth` / `outlineColor` / `outlineAlpha` (either mode; an arc's is a grown
-arc under the track), and `rc.bar.dx/dy` (the bar's OWN offset — never shared with the arc, the
-owner's ruling). `/gu bar <ring> <shape|rect|off|reset|debug> [size]` + `dir/rot/rim/absorb/
+`rc.outline` / `outlineWidth` / `outlineColor` / `outlineAlpha` (**arcs only since 2026-09-27** — the
+owner removed the bar outline, drawing code and all; an arc's is a grown arc under the track), and
+`rc.bar.dx/dy` (the bar's OWN offset — never shared with the arc, the owner's ruling).
+
+**Added 2026-09-27/29 (Hub FINDINGS §21, BACKLOG 12):**
+- **Gradient at any angle** — the grad StatusBar only sizes a clip; inside it a square ramp aimed with
+  8-corner `SetTexCoord` (`bar:SetGradient` / `AimGradient`).
+- **A shape's width and height apart** — `bar.shapeW / shapeH` (px, the SET's box for a set member;
+  nil = `size` at the art's proportions, `GU.BarShapeSize`), `shapeLink` (false = unlinked). The tab's
+  Width | Height with a lime bracket between them.
+- **Rounded Ends** (Rectangle only) — `bar.roundEnds` = nil | "start" | "end" | "both" (start = left /
+  bottom). Every masked texture carries two CAP masks (`cap-l/r/t/b.png`, a half-disc as tall as the
+  bar) with the CLAMP wrap, which a mask honours (TESTED with `/gu capprobe` — delete that probe).
+- **Gloss** — `bar.gloss`: the owner's Figma inner shadow (white 65%, 0/4, blur 4) rendered by
+  `tools/gen-gloss.py` into `Media/art/gloss/` (a band + a cap piece per height 8–96); it lives in a
+  clip sized by the invisible `gloss` StatusBar so it drains with the fill. Its alpha steps go to all
+  three pieces (`bar.glossAlpha`). ⚠ The faint dark rim at a rounded end is layer conflation; growing
+  masks to hide it was tried and REVERTED — do not re-offer.
+- **Per-piece dragging** — `GU:SetDragPiece(unit, "ring"|"text"|"aura", key)` puts a lime handle on the
+  open section's piece; dragging moves it LIVE from its SAVED offset (★ never from `GetPoint` — a
+  secret text's geometry is secret) and writes the offset on release. The unit's green box hugs the
+  rings (`f.bbX/bbY`, from `r.px/r.py`). Offsets reach ±1500. `/gu bar <ring> <shape|rect|off|reset|debug> [size]` + `dir/rot/rim/absorb/
 absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. The tab shows a
 **Drawn as · Arc | Bar** switch per section and swaps the geometry cells.
 

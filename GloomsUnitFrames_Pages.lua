@@ -54,7 +54,7 @@ local function RingCfg(key) local c = Cfg(); return c and c.rings and c.rings[ke
 -- ★ `v or default` is WRONG for a boolean (an OFF switch would read as its
 -- default): nil only.
 local function orDefault(v, default) if v == nil then return default end return v end
-local function apply() GU:ApplyLayout(selected) end
+local function apply() GU:ApplyLayout(selected); if P.syncDrag then P.syncDrag() end end
 local function Relayout() if GloomsHub.RefreshWindows then GloomsHub:RefreshWindows("unitframes") end end
 local function CopyTable(v)
   if type(v) ~= "table" then return v end
@@ -259,9 +259,9 @@ local function buildGlobal(parent)
     function(v) local c = Cfg(); if c then c.font = (v ~= "") and v or nil; apply() end end)
   attachTip(font.control, "Default font", "What every text on this unit draws in unless it picks its own in Texts.")
   place(font, 0, 41)
-  local x = Dial(f, 170, { label = "Horizontal Position", min = -700, max = 700, step = 1, unit = "px", dragPx = 1400, get = num("x", 0), set = setNum("x") })
+  local x = Dial(f, 170, { label = "Horizontal Position", min = -2500, max = 2500, step = 1, unit = "px", dragPx = 5000, get = num("x", 0), set = setNum("x") })
   place(x, 190, 0)
-  local y = Dial(f, 170, { label = "Vertical Position", min = -400, max = 400, step = 1, unit = "px", dragPx = 1000, get = num("y", 0), set = setNum("y") })
+  local y = Dial(f, 170, { label = "Vertical Position", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = num("y", 0), set = setNum("y") })
   place(y, 190, 41)
   local strata = Drop(f, "Strata", 170,
     function() local c = Cfg(); return STRATA_LABEL[(c and c.strata) or "MEDIUM"] or "Medium" end,
@@ -277,13 +277,13 @@ local function buildGlobal(parent)
   local copy = Button(f, "", 175, function()
     local from = (selected == "player") and "target" or "player"
     UI.confirm(("Copy the %s frame's settings onto the %s frame? Position stays as it is."):format(UNIT_LABEL[from]:lower(), UNIT_LABEL[selected]:lower()),
-      function() GU:CopyFrom(selected, from); P.refreshAll() end)
+      function() GU:CopyFrom(selected, from); P.refreshAll() end, "Copy")
   end)
   copy:SetPoint("TOPLEFT", 0, -163)
   attachTip(copy, "Copy settings", "Layer, visibility, texts and every ring the two share — sizes, angles, colors, rounding. Position is left alone. Asks first.")
   local reset = Button(f, "Reset to Defaults", 175, function()
     UI.confirm(("Reset the %s frame to its factory position, size and rings?"):format(UNIT_LABEL[selected]:lower()),
-      function() GU:Reset(selected); P.refreshAll() end)
+      function() GU:Reset(selected); P.refreshAll() end, "Reset")
   end)
   reset:SetPoint("TOPLEFT", 185, -163)
   attachTip(reset, "Reset to defaults", "Puts this unit back where a fresh install would have it. Asks first.")
@@ -426,7 +426,7 @@ local function buildTexts(parent)
   local f, s = Section(parent, 435)
   local rows, w = {}, {}
   local function R() s.refresh() end
-  local function selectPiece(i) textSel[selected] = i; R() end
+  local function selectPiece(i) textSel[selected] = i; R(); if P.syncDrag then P.syncDrag() end end
   local function commit(i, text)
     local l = TextList(); local t = l and l[i]; if not t then return end
     if text ~= t.template then t.template = text; apply() end
@@ -500,8 +500,8 @@ local function buildTexts(parent)
   w.maxWidth = Dial(f, 170, { label = "Max Width", min = 0, max = 600, step = 1, unit = "px", dragPx = 900, get = tget("maxWidth", 0), set = tset("maxWidth") })
   attachTip(w.maxWidth.strip, "Max width", "Longer text is cut with … past this width. 0 = no limit.")
   w.shadow = Switch(f, "Drop Shadow", 170, OFFON, tget("shadow", true), tset("shadow"))
-  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -800, max = 800, step = 1, unit = "px", dragPx = 1600, get = tget("x", 0), set = tset("x") })
-  w.y = Dial(f, 170, { label = "Vertical Offset", min = -800, max = 800, step = 1, unit = "px", dragPx = 1600, get = tget("y", 0), set = tset("y") })
+  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("x", 0), set = tset("x") })
+  w.y = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("y", 0), set = tset("y") })
   w.layer = LayerRow(f, function() return (TextCfg()) end,
     function(t) return GU:TextOwnLayer(t) end,
     function(t) local fr = GU:Frame(selected); t.ownLayer = true; t.strata = t.strata or (fr and fr:GetFrameStrata()) or "MEDIUM"; t.level = t.level or 70 end,
@@ -633,7 +633,7 @@ local function buildAuras(parent)
   local rows, w = {}, {}
   local function R() s.refresh() end
   P.auraRefresh = function() R(); refreshFilters() end
-  local function selectGroup(i) auraSel[selected] = i; R(); refreshFilters(); if P.syncPreviews then P.syncPreviews() end end
+  local function selectGroup(i) auraSel[selected] = i; R(); refreshFilters(); if P.syncPreviews then P.syncPreviews() end end   -- (syncPreviews re-pins the drag handle)
   local function commit(i, text)
     local l = AuraList(); local a = l and l[i]; if not a then return end
     local v = (text or ""):match("^%s*(.-)%s*$")
@@ -695,9 +695,9 @@ local function buildAuras(parent)
   w.swipe = Switch(f, "Cooldown Swipe", 170, OFFON, aget("swipe", true), aset("swipe"))
   attachTip(w.swipe.control, "Cooldown swipe", "A dark sweep across the icon as the aura runs down. Drawn by the game engine.")
   w.size = Dial(f, 170, { label = "Icon Size", min = 10, max = 96, step = 1, unit = "px", dragPx = 400, get = aget("size", 28), set = aset("size") })
-  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -800, max = 800, step = 1, unit = "px", dragPx = 1600, get = aget("x", 0), set = aset("x") })
+  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("x", 0), set = aset("x") })
   w.max = Dial(f, 170, { label = "Max Icons", min = 1, max = 40, step = 1, dragPx = 300, get = aget("max", 8), set = aset("max") })
-  w.y = Dial(f, 170, { label = "Vertical Offset", min = -800, max = 800, step = 1, unit = "px", dragPx = 1600, get = aget("y", 0), set = aset("y") })
+  w.y = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("y", 0), set = aset("y") })
   w.perLine = Dial(f, 170, { label = "Icons Per Row", min = 1, max = 40, step = 1, dragPx = 300, get = aget("perLine", 8), set = aset("perLine") })
   attachTip(w.perLine.strip, "Icons per row", "The row wraps after this many; 1 makes a column.")
   w.spacing = Dial(f, 170, { label = "Icon Spacing", min = 0, max = 20, step = 1, unit = "px", dragPx = 200, get = aget("spacing", 3), set = aset("spacing") })
@@ -761,9 +761,12 @@ end
 -- ===========================================================================
 -- THE RING SECTIONS — Health · Power · Class Resource · Cast, one builder.
 -- Faces from the mocks: BAR = Health / Cast ("gloomUnits, Health Bar Ring",
--- "Cast Bar"), ARC = Power / Class Resource. A rectangle bar has a width and a
--- height where a shaped one has a Size, so its first dial row is Width |
--- Horizontal Offset, then Height | Vertical Offset, then Rotation.
+-- "Cast Bar"), ARC = Power / Class Resource. A bar's first dial rows are Width |
+-- Horizontal Offset, then Height | Vertical Offset, then Rotation — a rectangle
+-- its box, a SHAPE its own width and height (2026-09-27, the owner: they come
+-- apart and the shape stretches; the lime bracket between them keeps the
+-- proportions while it is lit). A bar has no outline (the same day): the
+-- outline rows are the arc face's alone.
 -- ===========================================================================
 local OUTLINE = { { "off", "Off" }, { "thin", "Thin" }, { "medium", "Medium" }, { "thick", "Thick" } }
 local FILL_LABEL = { up = "Bottom to Top", down = "Top to Bottom", right = "Left to Right", left = "Right to Left" }
@@ -805,7 +808,53 @@ local function buildRing(parent, key, title, kind)
     bget("shape", "orb"),
     function(v) bset("shape")(v); R() end)
   -- geometry
-  w.bsize = Dial(f, 170, { label = "Size", min = 8, max = 500, step = 1, unit = "px", dragPx = 900, get = bget("size", 120), set = bset("size") })
+  -- a SHAPE's width and height: stored as shapeW / shapeH once either is moved
+  -- (until then `size` at the art's own proportions — GU.BarShapeSize)
+  -- (a Rectangle has no shape size — these dials are hidden then, but still read)
+  local function shapeWH()
+    local rc = RingCfg(key); if not (rc and rc.bar) then return 120, 120 end
+    local sw, sh = GU.BarShapeSize(rc.bar)
+    if not sw then return rc.bar.width or 200, rc.bar.height or 24 end
+    return sw, sh
+  end
+  local function linked() local rc = RingCfg(key); return not (rc and rc.bar and rc.bar.shapeLink == false) end
+  local function setShape(axis, v)
+    local rc = RingCfg(key); if not (rc and rc.bar) then return end
+    local cw, ch = shapeWH()
+    local nw, nh = cw, ch
+    if axis == "w" then nw = v; if linked() and cw > 0 then nh = ch * v / cw end
+    else nh = v; if linked() and ch > 0 then nw = cw * v / ch end end
+    rc.bar.shapeW = math.max(8, math.floor(nw + 0.5)); rc.bar.shapeH = math.max(4, math.floor(nh + 0.5))
+    apply()
+    if w.swidth then w.swidth:refresh(); w.sheight:refresh() end
+  end
+  w.swidth = Dial(f, 170, { label = "Width", min = 8, max = 800, step = 1, unit = "px", dragPx = 1400,
+    get = function() local a = shapeWH(); return math.floor(a + 0.5) end, set = function(v) setShape("w", v) end })
+  w.sheight = Dial(f, 170, { label = "Height", min = 4, max = 800, step = 1, unit = "px", dragPx = 1400,
+    get = function() local _, b = shapeWH(); return math.floor(b + 0.5) end, set = function(v) setShape("h", v) end })
+  attachTip(w.swidth, "Width", "The shape's width. With the bracket lit the height follows, keeping the shape's proportions; unlit, the shape stretches. For a set (the brackets), give every member the same width and height and they still nest.")
+  attachTip(w.sheight, "Height", "The shape's height. With the bracket lit the width follows, keeping the shape's proportions; unlit, the shape stretches.")
+  -- the link bracket, in the gap right of the two dials: its arms level with
+  -- the middles of their number boxes (15 + 8 into each row, rows 41 apart)
+  do
+    local link = CreateFrame("Button", nil, f); link:SetSize(10, 64)
+    local function seg(x, y, sw, sh) local t = link:CreateTexture(nil, "ARTWORK"); t:SetPoint("TOPLEFT", x, -y); t:SetSize(sw, sh); return t end
+    local segs = { seg(0, 23, 10, 1), seg(9, 23, 1, 42), seg(0, 64, 10, 1) }
+    function link:refresh()
+      local on = linked()
+      for _, t in ipairs(segs) do
+        if on then t:SetColorTexture(LIME.r, LIME.g, LIME.b, 1) else t:SetColorTexture(1, 1, 1, 0.4) end
+      end
+    end
+    link:SetScript("OnClick", function(self)
+      local rc = RingCfg(key); if not (rc and rc.bar) then return end
+      -- ★ not `(x) and nil or false` — that is false both ways (Lua's and/or with a nil)
+      if linked() then rc.bar.shapeLink = false else rc.bar.shapeLink = nil end
+      self:refresh()
+    end)
+    attachTip(link, "Keep proportions", "Lit: changing the width changes the height with it, and the other way round. Unlit: they move apart and the shape stretches. Click to switch.")
+    w.link = link
+  end
   w.asize = Dial(f, 170, { label = "Size", min = 40, max = 700, step = 1, unit = "px", dragPx = 1200, get = rget("size", 220), set = rset("size") })
   w.bwidth = Dial(f, 170, { label = "Width", min = 8, max = 800, step = 1, unit = "px", dragPx = 1400, get = bget("width", 200), set = bset("width") })
   w.bheight = Dial(f, 170, { label = "Height", min = 4, max = 800, step = 1, unit = "px", dragPx = 1400, get = bget("height", 24), set = bset("height") })
@@ -814,8 +863,28 @@ local function buildRing(parent, key, title, kind)
     local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; return orDefault(t[field], 0) end end
   local function offSet(field) return function(v) local rc = RingCfg(key); if not rc then return end
     local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; t[field] = v; apply() end end
-  w.dx = Dial(f, 170, { label = "Horizontal Offset", min = -300, max = 300, step = 1, unit = "px", dragPx = 900, get = offGet("dx"), set = offSet("dx") })
-  w.dy = Dial(f, 170, { label = "Vertical Offset", min = -300, max = 300, step = 1, unit = "px", dragPx = 900, get = offGet("dy"), set = offSet("dy") })
+  w.dx = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dx"), set = offSet("dx") })
+  w.dy = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dy"), set = offSet("dy") })
+  -- ROUNDED ENDS (Rectangle bars) and GLOSS (every bar), 2026-09-29. The ends
+  -- read Left / Right on a flat bar and Bottom / Top on a standing one; stored
+  -- as start / end.
+  local function flatBar() local rc = RingCfg(key); local b = rc and rc.bar; return not b or (b.width or 200) >= (b.height or 24) end
+  w.ends = Drop(f, "Rounded Ends", 170,
+    function()
+      local v = bget("roundEnds")()
+      local L = flatBar() and { start = "Left", ["end"] = "Right" } or { start = "Bottom", ["end"] = "Top" }
+      return (v == "both" and "Both") or (v and L[v]) or "None"
+    end,
+    function()
+      local fl = flatBar()
+      return { { value = "none", label = "None" }, { value = "start", label = fl and "Left" or "Bottom" },
+               { value = "end", label = fl and "Right" or "Top" }, { value = "both", label = "Both" } }
+    end,
+    function() return bget("roundEnds")() or "none" end,
+    function(v) bset("roundEnds")((v ~= "none") and v or nil); R() end)
+  attachTip(w.ends.control, "Rounded ends", "Rounds a Rectangle bar's end into a half-circle as tall as the bar — it stays perfectly round at any length. On a Class Resource row, every segment gets it. Rectangle only.")
+  w.gloss = Switch(f, "Gloss", 170, OFFON, bget("gloss", false), function(v) bset("gloss")(v or nil) end)
+  attachTip(w.gloss.control, "Gloss", "A crisp white rim along the bar's top edge, curving round a rounded end — Figma's inner shadow (white 65%, 4 down, 4 blur). Over the fill, draining with it; any color. A standing bar glosses at its top end only (the light is from above).")
   w.rot = Dial(f, 170, { label = "Rotation", min = 0, max = 359, step = 1, unit = "°", dragPx = 720, get = bget("rotation", 0), set = bset("rotation") })
   attachTip(w.rot.strip, "Rotation", "Counter-clockwise. The shape turns; the fill still runs along the screen axis you choose in Fill Direction.")
   w.thick = Dial(f, 170, { label = "Thickness", min = 2, max = 350, step = 1, unit = "px", dragPx = 900, get = rget("thickness", 22), set = rset("thickness") })
@@ -834,11 +903,11 @@ local function buildRing(parent, key, title, kind)
     attachTip(w.roundEnd.control, "Round the moving end", "A round cap that rides the leading edge as the value moves.")
   end
   -- outline
-  w.outline = Switch(f, "Bar Outline", 170, OUTLINE,
+  w.outline = Switch(f, "Outline", 170, OUTLINE,
     function() local rc = RingCfg(key); if not (rc and rc.outline) then return "off" end return rc.outlineWidth or "medium" end,
     function(v) local rc = RingCfg(key); if not rc then return end
       rc.outline = v ~= "off"; if v ~= "off" then rc.outlineWidth = v end; apply(); R() end)
-  attachTip(w.outline.control, "Outline", "An outline around the display's shape — a bar's silhouette, or the arc's whole track including its ends.")
+  attachTip(w.outline.control, "Outline", "An outline around the arc's whole track, ends included. (Arcs only.)")
   w.outlineColor = Color(f, "Outline Color", 170, { get = rget("outlineColor"), set = rset("outlineColor") })
   local og, os = pct(rget("outlineAlpha", 1), rset("outlineAlpha"), 1)
   w.outlineAlpha = Dial(f, 170, { label = "Outline Opacity", min = 0, max = 100, step = 1, unit = "%", dragPx = 400, get = og, set = os })
@@ -921,7 +990,7 @@ local function buildRing(parent, key, title, kind)
   end
   w.color = Color(f, "Fill Color", 85, fillOpts)
   w.gradAngle = Dial(f, 150, { label = "Gradient Angle", min = 0, max = 359, step = 1, unit = "°", dragPx = 720, get = rget("gradientAngle", 0), set = rset("gradientAngle") })
-  attachTip(w.gradAngle.strip, "Gradient angle", "0 runs left to right, 90 bottom to top. A bar snaps it to the nearest of the four.")
+  attachTip(w.gradAngle.strip, "Gradient angle", "0 runs left to right, 90 bottom to top — any angle, on an arc or a bar.")
   w.color2 = Color(f, "2nd Fill Color", 85, { required = true, get = rget("color2"), set = rset("color2") })
   -- track
   w.trackColor = Color(f, "Track Color", 170, { get = rget("trackColor"), set = rset("trackColor") })
@@ -1004,8 +1073,9 @@ local function buildRing(parent, key, title, kind)
         t[#t + 1] = row({ w.bheight, 0 }, { w.dy, 190 })
         t[#t + 1] = row({ w.rot, 0 })
       else
-        t[#t + 1] = row({ w.bsize, 0 }, { w.dx, 190 })
-        t[#t + 1] = row({ w.rot, 0 }, { w.dy, 190 })
+        t[#t + 1] = row({ w.swidth, 0 }, { w.link, 173 }, { w.dx, 190 })
+        t[#t + 1] = row({ w.sheight, 0 }, { w.dy, 190 })
+        t[#t + 1] = row({ w.rot, 0 })
       end
     else
       t[#t + 1] = row({ w.asize, 0 }, { w.dx, 190 })
@@ -1019,9 +1089,12 @@ local function buildRing(parent, key, title, kind)
     elseif not bar or isCast then
       t[#t + 1] = row({ w.roundStart, 0 }, { w.roundEnd, 190 }); t[#t + 1] = GAP
     end
-    t[#t + 1] = row({ w.outline, 0 }, { w.outlineColor, 190 })
-    t[#t + 1] = row({ w.outlineAlpha, 0 })
-    t[#t + 1] = GAP
+    if bar then t[#t + 1] = row({ w.ends, 0 }, { w.gloss, 190 }); t[#t + 1] = GAP end
+    if not bar then
+      t[#t + 1] = row({ w.outline, 0 }, { w.outlineColor, 190 })
+      t[#t + 1] = row({ w.outlineAlpha, 0 })
+      t[#t + 1] = GAP
+    end
     if isHealth then
       t[#t + 1] = row({ w.absorb, 0 }, { w.absorbColor, 190 })
       t[#t + 1] = row({ w.absorbAlpha, 0 })
@@ -1054,6 +1127,7 @@ local function buildRing(parent, key, title, kind)
     -- what another setting disables (30%, never hidden)
     local bar = rc.mode == "bar"
     w.shape:setEnabled(bar)
+    w.ends:setEnabled(bar and rc.bar and rc.bar.shape == "rect" or false)
     if w.roundEnd then w.roundStart:setEnabled(not bar); w.roundEnd:setEnabled(not bar) end
     if isResource then w.roundStart:setEnabled(not bar) end
     local outlined = rc.outline and true or false
@@ -1077,6 +1151,27 @@ end
 -- green outline); its cast ring runs a fake cast while the Cast section is on
 -- screen, and the selected aura group shows sample icons while Auras is.
 -- ===========================================================================
+-- PER-PIECE DRAGGING: the piece of the section most recently opened carries
+-- the engine's lime drag handle (GU:SetDragPiece) — a ring's section its ring,
+-- Texts the text being edited, Auras the group being edited; Global (or none)
+-- leaves just the unit's own green box.
+function P.syncDrag()
+  if not P.windowsOpen then GU:SetDragPiece(nil); return end
+  local fo = P.focus
+  if fo == "texts" then GU:SetDragPiece(selected, "text", textSel[selected] or 1)
+  elseif fo == "auras" then GU:SetDragPiece(selected, "aura", auraSel[selected] or 1)
+  elseif fo and fo ~= "global" then GU:SetDragPiece(selected, "ring", fo)
+  else GU:SetDragPiece(nil) end
+end
+local function focusHook(f, id)
+  -- a section is BUILT as it first opens, already shown — no OnShow for that
+  -- one; the Hub's `onShow` (below, on every section) covers it
+  P.focus = id
+  f:HookScript("OnShow", function() P.focus = id; P.syncDrag() end)
+  f:HookScript("OnHide", function() if P.focus == id then P.focus = nil end; P.syncDrag() end)
+  return f
+end
+
 local castFrame, auraFrame
 function P.syncPreviews()
   local open = P.windowsOpen
@@ -1084,6 +1179,7 @@ function P.syncPreviews()
     GU:SetCastPreview(u, open and u == selected and castFrame and castFrame:IsVisible() or false)
     GU:SetAuraPreview(u, (open and u == selected and auraFrame and auraFrame:IsVisible()) and (auraSel[selected] or 1) or nil)
   end
+  P.syncDrag()   -- after the previews: a cast or aura preview is what the handle pins to
 end
 
 -- ===========================================================================
@@ -1129,16 +1225,16 @@ GloomsHub:RegisterTab{
   selector = { build = buildSelector, h = 105 },
   tab      = { w = 360, build = buildTab },
   sections = {
-    { id = "global",   title = function() return ("Global %s Settings"):format(UNIT_LABEL[selected] or "") end, build = buildGlobal },
-    { id = "texts",    title = "Texts",                     build = buildTexts, dim = never },
-    { id = "auras",    title = "Auras (Buffs & Debuffs)",   dim = never,
-      build = function(p) auraFrame = buildAuras(p); return auraFrame end },
-    { id = "health",   title = "Health Bar/Ring",           build = function(p) return buildRing(p, "health", "Health", "health") end, dim = never },
-    { id = "power",    title = "Power Bar/Ring",            build = function(p) return buildRing(p, "power", "Power", "power") end, dim = never },
-    { id = "resource", title = "Class Resource Bar/Ring",   build = function(p) return buildRing(p, "resource", "Resource", "resource") end, dim = never,
+    { id = "global", onShow = function() P.focus = "global"; P.syncPreviews() end,   title = function() return ("Global %s Settings"):format(UNIT_LABEL[selected] or "") end, build = function(p) return focusHook(buildGlobal(p), "global") end },
+    { id = "texts", onShow = function() P.focus = "texts"; P.syncPreviews() end,    title = "Texts",                     build = function(p) return focusHook(buildTexts(p), "texts") end, dim = never },
+    { id = "auras", onShow = function() P.focus = "auras"; P.syncPreviews() end,    title = "Auras (Buffs & Debuffs)",   dim = never,
+      build = function(p) auraFrame = focusHook(buildAuras(p), "auras"); return auraFrame end },
+    { id = "health", onShow = function() P.focus = "health"; P.syncPreviews() end,   title = "Health Bar/Ring",           build = function(p) return focusHook(buildRing(p, "health", "Health", "health"), "health") end, dim = never },
+    { id = "power", onShow = function() P.focus = "power"; P.syncPreviews() end,    title = "Power Bar/Ring",            build = function(p) return focusHook(buildRing(p, "power", "Power", "power"), "power") end, dim = never },
+    { id = "resource", onShow = function() P.focus = "resource"; P.syncPreviews() end, title = "Class Resource Bar/Ring",   build = function(p) return focusHook(buildRing(p, "resource", "Resource", "resource"), "resource") end, dim = never,
       hidden = function() local c = Cfg(); return not (c and c.rings and c.rings.resource) end },
-    { id = "cast",     title = "Cast Bar/Ring",             dim = never,
-      build = function(p) castFrame = buildRing(p, "cast", "Cast Bar", "cast"); return castFrame end },
+    { id = "cast", onShow = function() P.focus = "cast"; P.syncPreviews() end,     title = "Cast Bar/Ring",             dim = never,
+      build = function(p) castFrame = focusHook(buildRing(p, "cast", "Cast Bar", "cast"), "cast"); return castFrame end },
   },
   onOpen   = function()
     P.windowsOpen = true
@@ -1158,6 +1254,8 @@ GloomsHub:RegisterTab{
 
 GU:OnChange(function(what, which)
   if what == "profile" then if P.windowsOpen then P.refreshAll() end; return end
+  -- a piece dragged on screen: its offset dials follow
+  if what == "piece" and which == selected then for _, s in ipairs(P.secs) do if s.refresh then s.refresh() end end; return end
   if which ~= selected then return end
   if what == "position" and P.globalDials then for _, d in ipairs(P.globalDials) do d:refresh() end end
 end)

@@ -518,6 +518,22 @@ local function LayoutAuraPreview(f, cfg, unit)
 end
 
 -- The tab: preview group `index` of `unit` (nil = off). Re-laid on every ApplyLayout.
+-- The preview's box for the piece-drag handle (the engine's SetDragPiece):
+-- the preview frame (a 1x1 point the icons grow from), the corner they grow
+-- from, and the block's width and height at its full count.
+function GU:AuraPreviewBox(unit, ac)
+    local f = self.Frame and self:Frame(unit)
+    local pv = f and f.auraPreview
+    if not (pv and pv:IsShown() and ac) then return nil end
+    local iw, ih = IconRect(ac)
+    local gap = ac.spacing or 3
+    local perLine = math.max(1, ac.perLine or 8)
+    local count = math.max(1, math.min(ac.max or 8, 40))
+    local cols = math.min(count, perLine)
+    local lines = math.ceil(count / perLine)
+    return pv, AnchorFor(ac.growH, ac.growV), cols * iw + (cols - 1) * gap, lines * ih + (lines - 1) * gap
+end
+
 function GU:SetAuraPreview(unit, index)
     auraPreview[unit] = index
     local f = self.Frame and self:Frame(unit)

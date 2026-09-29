@@ -662,7 +662,7 @@ local function kitRingSection(b, sc, key, title, kind)
     function() local rc = RingCfg(key); return rc and rc.colorMode or "solid" end,
     setRR("colorMode"))
   w.gradAngle = dialCell(b, { label = "Gradient Angle", min = 0, max = 359, unit = "°", short = true, get = rnum(key, "gradientAngle", 0), set = setR("gradientAngle") })
-  attachTip(w.gradAngle.strip, "Gradient angle", "0 runs left to right, 90 bottom to top. A bar snaps it to the nearest of the four.")
+  attachTip(w.gradAngle.strip, "Gradient angle", "0 runs left to right, 90 bottom to top — any angle, on an arc or a bar.")
   local function isBar() local rc = RingCfg(key); return rc and rc.mode == "bar" end
   w.fillDir = pickCell(b, "Fill Direction", 150,
     function()
