@@ -882,9 +882,101 @@ local function buildRing(parent, key, title, kind)
     end,
     function() return bget("roundEnds")() or "none" end,
     function(v) bset("roundEnds")((v ~= "none") and v or nil); R() end)
-  attachTip(w.ends.control, "Rounded ends", "Rounds a Rectangle bar's end into a half-circle as tall as the bar — it stays perfectly round at any length. On a Class Resource row, every segment gets it. Rectangle only.")
+  attachTip(w.ends.control, "Rounded ends", "Rounds a Rectangle bar's end into a half-circle as tall as the bar — it stays perfectly round at any length. On a Class Resource row, every segment gets it. Rectangle only. With a Fill End, the end the fill runs toward takes the Fill End's shape instead — track and all.")
   w.gloss = Switch(f, "Gloss", 170, OFFON, bget("gloss", false), function(v) bset("gloss")(v or nil) end)
   attachTip(w.gloss.control, "Gloss", "A crisp white rim along the bar's top edge, curving round a rounded end — Figma's inner shadow (white 65%, 4 down, 4 blur). Over the fill, draining with it; any color. A standing bar glosses at its top end only (the light is from above).")
+  -- ★ THE FILL'S END, A MARKER, SEGMENTS (2026-09-29, the owner's reference
+  -- sheet of bars; the engine's NewBar / NewRow say how). Bars other than the
+  -- Class Resource (already a row of points).
+  local function nseg() local v = bget("segments", 1)(); return math.floor(v or 1) end
+  local function whole() return isRect() and nseg() >= 2 and bget("segWhole", false)() == true end
+  local ENDS = { { "none", "None" }, { "round", "Round" }, { "angled", "Angled" }, { "point", "Point" } }
+  local ENDL = {}; for _, e in ipairs(ENDS) do ENDL[e[1]] = e[2] end
+  w.fillEnd = Drop(f, "Fill End", 170,
+    function() return ENDL[bget("fillEnd")() or "none"] or "None" end,
+    function() local o = {}; for _, e in ipairs(ENDS) do o[#o + 1] = { value = e[1], label = e[2] } end; return o end,
+    function() return bget("fillEnd")() or "none" end,
+    function(v) bset("fillEnd")((v ~= "none") and v or nil); R() end)
+  attachTip(w.fillEnd.control, "Fill end", "The shape of the fill's moving end: round, cut on a slant, or a point. It rides the edge as the value moves, reaches the bar's end at full, and is gone at 0%. Rectangle bars without segments.")
+  local MARKS = { { "none", "None" }, { "post", "Post" }, { "knob", "Knob" }, { "spark", "Spark" }, { "diamond", "Diamond" }, { "glow", "Glow" }, { "custom", "Custom Texture" } }
+  local MARKL = {}; for _, e in ipairs(MARKS) do MARKL[e[1]] = e[2] end
+  w.marker = Drop(f, "Marker", 170,
+    function() return MARKL[bget("marker")() or "none"] or "None" end,
+    function() local o = {}; for _, e in ipairs(MARKS) do o[#o + 1] = { value = e[1], label = e[2] } end; return o end,
+    function() return bget("marker")() or "none" end,
+    function(v) bset("marker")((v ~= "none") and v or nil); R() end)
+  attachTip(w.marker.control, "Marker", "A sprite that rides the fill's moving edge (the tip of the Fill End, if there is one) and is gone at 0%. Custom Texture takes any texture: a Media name, an atlas, a file ID or a path.")
+  w.markerSize = Dial(f, 170, { label = "Marker Size", min = 2, max = 200, step = 1, unit = "px", dragPx = 600,
+    get = function()
+      local rc = RingCfg(key); local b = rc and rc.bar
+      if b and b.markerSize then return b.markerSize end
+      local fw, fh = b and b.width or 200, b and b.height or 24
+      if b and b.shape ~= "rect" then fw, fh = GU.BarShapeSize(b) end
+      local vertical = b and (b.fillDir == "up" or b.fillDir == "down" or b.fillDir == nil)
+      return math.floor((vertical and fw or fh) + 8 + 0.5)
+    end, set = bset("markerSize") })
+  attachTip(w.markerSize.strip, "Marker size", "Across the bar, px. The default is the bar's thickness plus 8.")
+  w.markerAlign = Switch(f, "Marker Position", 170, { { "center", "Centered" }, { "inside", "Inside" } },
+    function() return bget("markerAlign")() or "center" end, function(v) bset("markerAlign")((v ~= "center") and v or nil) end)
+  attachTip(w.markerAlign.control, "Marker position", "Centered: on the edge, half over the fill. Inside: its far side on the edge, all over the fill.")
+  w.markerColor = Color(f, "Marker Color", 170, { required = true,
+    get = function() return bget("markerColor")() or { 1, 1, 1 } end, set = bset("markerColor") })
+  -- the field (104) and Browse (60): the Hub's texture browser (gloomMEDIA → Game Textures)
+  w.markerTex = cell(f, "Custom Marker Texture", 170, function(c)
+    return UI.gField(c, 104, {
+      placeholder = "Media, atlas, ID, path",
+      commit = function(text) bset("markerTex")((text or ""):match("^%s*(.-)%s*$")) end,
+      revert = function(self) self:SetText(bget("markerTex")() or "") end,
+    })
+  end)
+  do
+    local mt = w.markerTex
+    local browse = UI.gButton(mt, "Browse", { w = 60, h = 16, size = 10, onClick = function()
+      GloomsHub:PickTexture({ tool = "unitframes", text = bget("markerTex")() or "", actions = {
+        { label = "Use This Texture", tip = "Makes this texture the bar's marker (a still image — a marker doesn't play spritesheets).",
+          fn = function(t) bset("markerTex")(t); mt:refresh() end } } })
+    end })
+    browse:SetPoint("TOPLEFT", 110, -15)
+    attachTip(browse, "Texture browser", "Preview the game's textures and your favorites, and pick one for the marker.")
+    function mt:refresh() if not self.control:HasFocus() then self.control:SetText(bget("markerTex")() or "") end end
+    function mt:setEnabled(on)
+      on = on and true or false
+      self.control:setEnabled(on); self.label:SetAlpha(on and 1 or DIM)
+      browse:SetEnabled(on); browse:SetAlpha(on and 1 or DIM)
+    end
+  end
+  w.segs = Dial(f, 170, { label = "Segments", min = 1, max = 30, step = 1, dragPx = 400,
+    get = function() return nseg() end, set = function(v) bset("segments")((v >= 2) and v or nil); R() end })
+  attachTip(w.segs.strip, "Segments", "Splits the bar into this many segments. 1 = no segments.")
+  w.segWhole = Switch(f, "Whole Segments", 170, OFFON, bget("segWhole", false), function(v) bset("segWhole")(v or nil); R() end)
+  attachTip(w.segWhole.control, "Whole segments", "On: each segment is its own little bar that lights only once the value covers it, with real gaps between them — and each gets the Rounded Ends and Gloss (rounded ends make pills or dots). Off: one bar with divider lines over it; the fill runs smoothly under them. Rectangle bars only.")
+  w.segStyle = Switch(f, "Segment Style", 170, { { "straight", "Straight" }, { "slant", "Slanted" }, { "chevron", "Chevron" } },
+    function() return bget("segStyle")() or "straight" end, function(v) bset("segStyle")((v ~= "straight") and v or nil); R() end)
+  w.segSlant = Dial(f, 170, { label = "Slant Angle", min = 5, max = 60, step = 1, unit = "°", dragPx = 300, get = bget("segSlant", 30), set = bset("segSlant") })
+  w.segGap = Dial(f, 170, { label = "Segment Gap", min = 1, max = 30, step = 1, unit = "px", dragPx = 300, get = bget("segGap", 2), set = bset("segGap") })
+  w.segColor = Color(f, "Divider Color", 170, { required = true,
+    get = function() return bget("segColor")() or { 0, 0, 0 } end, set = bset("segColor") })
+  attachTip(w.segColor.control, "Divider color", "The lines between segments are drawn over the bar, so they need a color — pick one close to what's behind the bar. (Whole Segments has real gaps instead.)")
+  local sg, ss = pct(bget("segAlpha", 1), bset("segAlpha"), 1)
+  w.segAlpha = Dial(f, 170, { label = "Divider Opacity", min = 0, max = 100, step = 1, unit = "%", dragPx = 400, get = sg, set = ss })
+  -- GROW FROM (2026-09-30): which edge stays put when the size changes.
+  -- Switching keeps the bar where it is (the offset is re-based on the new edge).
+  local GROW = { { "center", "Center" }, { "left", "Left" }, { "right", "Right" }, { "top", "Top" }, { "bottom", "Bottom" } }
+  local GROWL = {}; for _, e in ipairs(GROW) do GROWL[e[1]] = e[2] end
+  w.grow = Drop(f, "Grow From", 170,
+    function() return GROWL[bget("growFrom")() or "center"] or "Center" end,
+    function() local o = {}; for _, e in ipairs(GROW) do o[#o + 1] = { value = e[1], label = e[2] } end; return o end,
+    function() return bget("growFrom")() or "center" end,
+    function(v)
+      local rc = RingCfg(key); local b = rc and rc.bar; if not b then return end
+      local ax, ay = GU.BarAnchorAdj(b)
+      b.growFrom = (v ~= "center") and v or nil
+      local bx, by = GU.BarAnchorAdj(b)
+      b.dx = math.floor((b.dx or 0) + ax - bx + 0.5)
+      b.dy = math.floor((b.dy or 0) + ay - by + 0.5)
+      apply(); R()
+    end)
+  attachTip(w.grow.control, "Grow from", "Which edge stays put when you change the bar's width or height — Center grows it both ways. Switching doesn't move the bar. The offsets are then where that edge sits.")
   w.rot = Dial(f, 170, { label = "Rotation", min = 0, max = 359, step = 1, unit = "°", dragPx = 720, get = bget("rotation", 0), set = bset("rotation") })
   attachTip(w.rot.strip, "Rotation", "Counter-clockwise. The shape turns; the fill still runs along the screen axis you choose in Fill Direction.")
   w.thick = Dial(f, 170, { label = "Thickness", min = 2, max = 350, step = 1, unit = "px", dragPx = 900, get = rget("thickness", 22), set = rset("thickness") })
@@ -1071,11 +1163,11 @@ local function buildRing(parent, key, title, kind)
       if rect then
         t[#t + 1] = row({ w.bwidth, 0 }, { w.dx, 190 })
         t[#t + 1] = row({ w.bheight, 0 }, { w.dy, 190 })
-        t[#t + 1] = row({ w.rot, 0 })
+        t[#t + 1] = row({ w.rot, 0 }, isResource and nil or { w.grow, 190 })
       else
         t[#t + 1] = row({ w.swidth, 0 }, { w.link, 173 }, { w.dx, 190 })
         t[#t + 1] = row({ w.sheight, 0 }, { w.dy, 190 })
-        t[#t + 1] = row({ w.rot, 0 })
+        t[#t + 1] = row({ w.rot, 0 }, isResource and nil or { w.grow, 190 })
       end
     else
       t[#t + 1] = row({ w.asize, 0 }, { w.dx, 190 })
@@ -1090,6 +1182,17 @@ local function buildRing(parent, key, title, kind)
       t[#t + 1] = row({ w.roundStart, 0 }, { w.roundEnd, 190 }); t[#t + 1] = GAP
     end
     if bar then t[#t + 1] = row({ w.ends, 0 }, { w.gloss, 190 }); t[#t + 1] = GAP end
+    if bar and not isResource then
+      t[#t + 1] = row({ w.fillEnd, 0 }, { w.marker, 190 })
+      t[#t + 1] = row({ w.markerSize, 0 }, { w.markerAlign, 190 })
+      t[#t + 1] = row({ w.markerColor, 0 }, { w.markerTex, 190 })
+      t[#t + 1] = GAP
+      t[#t + 1] = row({ w.segs, 0 }, { w.segWhole, 190 })
+      t[#t + 1] = row({ w.segStyle, 0 }, { w.segSlant, 190 })
+      t[#t + 1] = row({ w.segGap, 0 }, { w.segAlpha, 190 })
+      t[#t + 1] = row({ w.segColor, 0 })
+      t[#t + 1] = GAP
+    end
     if not bar then
       t[#t + 1] = row({ w.outline, 0 }, { w.outlineColor, 190 })
       t[#t + 1] = row({ w.outlineAlpha, 0 })
@@ -1128,6 +1231,20 @@ local function buildRing(parent, key, title, kind)
     local bar = rc.mode == "bar"
     w.shape:setEnabled(bar)
     w.ends:setEnabled(bar and rc.bar and rc.bar.shape == "rect" or false)
+    if w.fillEnd and bar and not isResource then
+      local b = rc.bar or {}
+      local rect, n, wh = b.shape == "rect", nseg(), whole()
+      w.fillEnd:setEnabled(rect and n < 2)
+      w.marker:setEnabled(not wh)
+      local mk = b.marker ~= nil and not wh
+      w.markerSize:setEnabled(mk); w.markerAlign:setEnabled(mk); w.markerColor:setEnabled(mk)
+      w.markerTex:setEnabled(mk and b.marker == "custom")
+      w.segWhole:setEnabled(rect and n >= 2)
+      local smooth = n >= 2 and not wh
+      w.segStyle:setEnabled(smooth); w.segSlant:setEnabled(smooth and (b.segStyle == "slant" or b.segStyle == "chevron"))
+      w.segGap:setEnabled(n >= 2); w.segColor:setEnabled(smooth); w.segAlpha:setEnabled(smooth)
+      w.rot:setEnabled(not wh)
+    end
     if w.roundEnd then w.roundStart:setEnabled(not bar); w.roundEnd:setEnabled(not bar) end
     if isResource then w.roundStart:setEnabled(not bar) end
     local outlined = rc.outline and true or false
@@ -1247,9 +1364,31 @@ GloomsHub:RegisterTab{
     GU:SetEditing(nil)
     if codesWin then codesWin:Hide() end
     if filterWin then filterWin:Hide() end
+    if GloomsHub.ClosePicker then GloomsHub:ClosePicker() end
     P.syncPreviews()
   end,
   refresh  = function() for _, s in ipairs(P.secs) do if s.refresh then s.refresh() end end end,
+  -- ARROW KEYS (the Hub, 2026-09-30): the unit while Global is open; the piece
+  -- wearing the lime handle while its section (a ring, Texts, Auras) is
+  nudge    = function(dx, dy, isOpen)
+    if not (selected and P.windowsOpen) then return false end
+    if isOpen("global") then GU:Nudge(selected, dx, dy); return true end
+    for _, sid in ipairs({ "health", "power", "resource", "cast", "texts", "auras" }) do
+      if isOpen(sid) then return GU:NudgePiece(selected, dx, dy) end
+    end
+    return false
+  end,
+  -- UNDO (the Hub's Undo.lua, 2026-09-30): the active profile, both units
+  undo     = {
+    snapshot = function() local t = GU:ActiveProfileTable(); return t and CopyTable(t) or {} end,
+    restore  = function(snap)
+      local t = GU:ActiveProfileTable(); if not t then return end
+      GloomsHub:UndoPatch(t, snap)
+      GU:ReapplyAll()
+      P.refreshAll()
+    end,
+    token    = function() return GU:ActiveProfileName() end,
+  },
 }
 
 GU:OnChange(function(what, which)

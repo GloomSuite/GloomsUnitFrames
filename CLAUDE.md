@@ -82,7 +82,7 @@ owner removed the bar outline, drawing code and all; an arc's is a grown arc und
   Width | Height with a lime bracket between them.
 - **Rounded Ends** (Rectangle only) — `bar.roundEnds` = nil | "start" | "end" | "both" (start = left /
   bottom). Every masked texture carries two CAP masks (`cap-l/r/t/b.png`, a half-disc as tall as the
-  bar) with the CLAMP wrap, which a mask honours (TESTED with `/gu capprobe` — delete that probe).
+  bar) with the CLAMP wrap, which a mask honours (TESTED with a throwaway `/gu capprobe`, since removed).
 - **Gloss** — `bar.gloss`: the owner's Figma inner shadow (white 65%, 0/4, blur 4) rendered by
   `tools/gen-gloss.py` into `Media/art/gloss/` (a band + a cap piece per height 8–96); it lives in a
   clip sized by the invisible `gloss` StatusBar so it drains with the fill. Its alpha steps go to all
@@ -94,6 +94,23 @@ owner removed the bar outline, drawing code and all; an arc's is a grown arc und
   rings (`f.bbX/bbY`, from `r.px/r.py`). Offsets reach ±1500. `/gu bar <ring> <shape|rect|off|reset|debug> [size]` + `dir/rot/rim/absorb/
 absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. The tab shows a
 **Drawn as · Arc | Bar** switch per section and swaps the geometry cells.
+
+## ★ BAR FILLS, ANCHORS, NUDGES (2026-09-29/30) — Hub FINDINGS §21 addendum, §24
+
+- **A bar's fill:** `bar.fillEnd` round | angled | point (Rectangle, no segments) — end pieces pinned
+  PAST the fill's edge (the layers shortened by `capLen`), overlapping it by one screen pixel, gone at
+  0% (`endGate`, a step curve); its gradient piece is the bar's own ramp cut by `endMask`; the track
+  and the absorb stripes are cut to the end's shape by CLAMP masks at the far end, which is why the
+  Rounded End on THAT side stands down. `bar.marker` post | knob | spark | diamond | glow | custom
+  (`markerTex`, the Hub's texture browser) rides the edge / the end's tip. `bar.segments` 2..30: divider
+  lines over the bar (`segStyle` straight | slant | chevron, `segGap`, `segColor`), or with `segWhole`
+  a ROW of window bars (`NewRow`, fed the ring's percent — real gaps). Art: `tools/gen-fill-art.py`.
+- **`bar.growFrom`** center | left | right | top | bottom: that edge stays put; dx / dy are that
+  edge's middle (`BarAnchorAdj`); `r.px / r.py` stay CENTRES for the unit box and the drag.
+- **ANCHORS:** the two unit frames are offered to other tools (`uf:player`, `uf:target`); login calls
+  `GloomsHub:AnchorsChanged()` once they exist (addons load alphabetically — FINDINGS §24).
+- **Nudges:** the Hub's arrow keys move the unit (Global open, `GU:Nudge`) or the piece wearing the
+  lime handle (`GU:NudgePiece`). **Undo:** the Hub's (`GU:ActiveProfileTable`, `GU:ReapplyAll`).
 
 ## Shape
 
