@@ -123,6 +123,17 @@ TAGS.name = { group = "identity", make = function(style)
     end
 end }
 
+-- [guild] — the unit's guild, blank without one; [title] — the name as the
+-- game shows it with the unit's title ("Thrall the Warchief"), the plain name
+-- without one (2026-09-30, the owner). Same shape as [name]: passed through,
+-- never compared.
+TAGS.guild = { group = "identity", make = function()
+    return "%s", function(unit) return (GetGuildInfo(unit)) or "" end
+end }
+TAGS.title = { group = "identity", make = function()
+    return "%s", function(unit) return UnitPVPName(unit) or UnitName(unit) or "" end
+end }
+
 TAGS.level = { group = "identity", make = function()
     return "%s", function(unit)
         local l = UnitEffectiveLevel(unit)
@@ -282,6 +293,8 @@ end }
 -- What the tab prints. Kept next to the table so it cannot drift from it.
 GU.TEXT_HELP = {
     { "[name]", "name — [name:8] first 8 letters" },
+    { "[guild]", "guild name, blank without one" },
+    { "[title]", "name with its title — Thrall the Warchief" },
     { "[level]", "level, ?? for a skull" },
     { "[class] [race] [type]", "Warlock · Orc · Demon" },
     { "[elite]", "Elite / Rare / Boss — [elite:short] for + R B" },

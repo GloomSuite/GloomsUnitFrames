@@ -1904,15 +1904,8 @@ local function CreateUnitFrame(which)
 
     local g = CreateFrame("Frame", nil, UIParent)
     g:SetFrameStrata("HIGH")   -- over the ring, under the Suite window (DIALOG)
-    local t = g:CreateTexture(nil, "OVERLAY")
-    t:SetTexture("Interface\\Buttons\\WHITE8x8"); t:SetVertexColor(0, 1, 0.3, 0.9)
-    t:SetPoint("TOPLEFT"); t:SetPoint("BOTTOMLEFT"); t:SetWidth(1)
-    local t2 = g:CreateTexture(nil, "OVERLAY"); t2:SetTexture("Interface\\Buttons\\WHITE8x8"); t2:SetVertexColor(0, 1, 0.3, 0.9)
-    t2:SetPoint("TOPRIGHT"); t2:SetPoint("BOTTOMRIGHT"); t2:SetWidth(1)
-    local t3 = g:CreateTexture(nil, "OVERLAY"); t3:SetTexture("Interface\\Buttons\\WHITE8x8"); t3:SetVertexColor(0, 1, 0.3, 0.9)
-    t3:SetPoint("TOPLEFT"); t3:SetPoint("TOPRIGHT"); t3:SetHeight(1)
-    local t4 = g:CreateTexture(nil, "OVERLAY"); t4:SetTexture("Interface\\Buttons\\WHITE8x8"); t4:SetVertexColor(0, 1, 0.3, 0.9)
-    t4:SetPoint("BOTTOMLEFT"); t4:SetPoint("BOTTOMRIGHT"); t4:SetHeight(1)
+    -- the unit's box: corner brackets 10 px outside (2026-09-30, the Hub's UI.gBrackets)
+    GloomsHub.UI.gBrackets(g, 0, 1, 0.3, 0.9)
     g:Hide()
     ghosts[which] = g
     return f
@@ -2133,6 +2126,52 @@ function GU:ApplyLayout(which)
 
     self:Refresh(which)
     UpdateVisibility()
+    if which == "player" then GU:ApplyBlizzardCastBar() end
+end
+
+------------------------------------------------------------------------
+-- ★ BLIZZARD'S CAST BAR (2026-09-30, the owner: with EllesmereUI's player cast
+-- bar off, Blizzard's came back — "ONLY the GU one", and NOT contingent on EUI
+-- "in case I ever uninstall it"). While the player's cast display is on and
+-- `rings.cast.hideBlizzard` isn't false (default: hide), PlayerCastingBarFrame
+-- lives in a hidden frame — re-parented, not hidden, so nothing Blizzard does
+-- to it shows it again; the hook puts it back if anything re-parents it (Edit
+-- Mode, another addon restoring it). EllesmereUI does the same thing the same
+-- way, so the two agree whether or not it is installed. Never during combat or
+-- with Edit Mode open (re-parenting there runs Blizzard's layout code tainted —
+-- EUI's own note); both re-apply on the way out. Switched off: back to the
+-- parent it had.
+------------------------------------------------------------------------
+local blizzHidden, blizzOrigParent, blizzHooked
+local function EditModeOpen() return EditModeManagerFrame and EditModeManagerFrame:IsShown() end
+local function WantBlizzardHidden()
+    local cfg = db and db.player
+    local rc = cfg and cfg.rings and cfg.rings.cast
+    return rc ~= nil and rc.enabled ~= false and rc.hideBlizzard ~= false
+end
+function GU:ApplyBlizzardCastBar()
+    local bar = PlayerCastingBarFrame
+    if not bar or InCombatLockdown() or EditModeOpen() then return end
+    if not blizzHidden then blizzHidden = CreateFrame("Frame"); blizzHidden:Hide() end
+    if WantBlizzardHidden() then
+        if bar:GetParent() ~= blizzHidden then
+            blizzOrigParent = bar:GetParent()
+            bar:SetParent(blizzHidden)
+        end
+        if not blizzHooked then
+            blizzHooked = true
+            hooksecurefunc(bar, "SetParent", function(self, newParent)
+                if newParent ~= blizzHidden and WantBlizzardHidden() then
+                    C_Timer.After(0, function() GU:ApplyBlizzardCastBar() end)
+                end
+            end)
+        end
+    elseif bar:GetParent() == blizzHidden then
+        bar:SetParent(blizzOrigParent or UIParent)
+    end
+end
+if EventRegistry and EventRegistry.RegisterCallback then
+    EventRegistry:RegisterCallback("EditMode.Exit", function() GU:ApplyBlizzardCastBar() end, GU)
 end
 
 -- The resource ring: N segments around the arc, each owning one point's
@@ -2840,13 +2879,9 @@ local function DragHandle(which)
     h = CreateFrame("Frame", nil, UIParent)
     h:SetFrameStrata("HIGH"); h:SetFrameLevel(100)
     h:EnableMouse(true); h:Hide()
-    local fill = h:CreateTexture(nil, "BACKGROUND"); fill:SetAllPoints(); fill:SetColorTexture(0.44, 0.93, 0.25, 0.08)
-    local function edge(p1, p2, horiz)
-        local t = h:CreateTexture(nil, "OVERLAY"); t:SetColorTexture(0.44, 0.93, 0.25, 0.9)
-        t:SetPoint(p1); t:SetPoint(p2); if horiz then t:SetHeight(1) else t:SetWidth(1) end
-    end
-    edge("TOPLEFT", "TOPRIGHT", true); edge("BOTTOMLEFT", "BOTTOMRIGHT", true)
-    edge("TOPLEFT", "BOTTOMLEFT"); edge("TOPRIGHT", "BOTTOMRIGHT")
+    -- corner brackets 10 px outside, not a box over the piece (the owner,
+    -- 2026-09-30 — the Hub's UI.gBrackets); the drag area is still the piece
+    GloomsHub.UI.gBrackets(h, 0.44, 0.93, 0.25, 0.9)
     local function cursor() local x, y = GetCursorPosition(); local s = UIParent:GetEffectiveScale(); return x / s, y / s end
     local function finish(self)
         local st = self.st
@@ -2977,7 +3012,7 @@ for _, e in ipairs({ "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_CLASSIFICATION_CHAN
     ev:RegisterUnitEvent(e, "player", "target")
 end
 for _, e in ipairs({ "PLAYER_FLAGS_CHANGED", "PLAYER_UPDATE_RESTING", "RAID_TARGET_UPDATE", "PARTY_LEADER_CHANGED",
-                     "GROUP_ROSTER_UPDATE", "UNIT_THREAT_LIST_UPDATE" }) do
+                     "GROUP_ROSTER_UPDATE", "UNIT_THREAT_LIST_UPDATE", "PLAYER_GUILD_UPDATE" }) do
     ev:RegisterEvent(e)
 end
 ev:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
@@ -3026,6 +3061,7 @@ ev:SetScript("OnEvent", function(_, event, unit)
         or event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
         UpdateVisibility()
         if event == "PLAYER_TARGET_CHANGED" then GU:RefreshAuras(frames.target) end
+        if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ENTERING_WORLD" then GU:ApplyBlizzardCastBar() end
     elseif event == "SPELLS_CHANGED" or (event == "UNIT_PET" and unit == "player") then
         RefreshKick()
     elseif event == "RUNE_POWER_UPDATE" then
@@ -3037,7 +3073,8 @@ ev:SetScript("OnEvent", function(_, event, unit)
     elseif event:find("^UNIT_SPELLCAST") and (unit == "player" or unit == "target") then
         GU:RefreshCast(unit)
     elseif event == "PLAYER_FLAGS_CHANGED" or event == "PLAYER_UPDATE_RESTING" or event == "RAID_TARGET_UPDATE"
-        or event == "PARTY_LEADER_CHANGED" or event == "GROUP_ROSTER_UPDATE" or event == "UNIT_THREAT_LIST_UPDATE" then
+        or event == "PARTY_LEADER_CHANGED" or event == "GROUP_ROSTER_UPDATE" or event == "UNIT_THREAT_LIST_UPDATE"
+        or event == "PLAYER_GUILD_UPDATE" then   -- [guild] (the player's arrives after login)
         if initialised then
             for _, which in ipairs(GU.UNITS) do
                 if frames[which]:IsShown() then GU:RefreshTexts(frames[which], which) end

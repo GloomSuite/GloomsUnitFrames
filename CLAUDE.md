@@ -109,6 +109,12 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
   edge's middle (`BarAnchorAdj`); `r.px / r.py` stay CENTRES for the unit box and the drag.
 - **ANCHORS:** the two unit frames are offered to other tools (`uf:player`, `uf:target`); login calls
   `GloomsHub:AnchorsChanged()` once they exist (addons load alphabetically — FINDINGS §24).
+- **Blizzard's cast bar** (2026-09-30, `GU:ApplyBlizzardCastBar`): while the player's cast display is
+  on and `rings.cast.hideBlizzard ~= false`, `PlayerCastingBarFrame` is re-parented into a hidden frame
+  (EllesmereUI's method, but NOT dependent on it — the owner); never in combat or Edit Mode, re-applied
+  after both; a `SetParent` hook re-hides it. The Cast section's "Hide Blizzard's Cast Bar".
+- **Text codes `[guild]` and `[title]`** (2026-09-30): `GetGuildInfo` / `UnitPVPName`, passed through.
+  No guild RANK (the owner).
 - **Nudges:** the Hub's arrow keys move the unit (Global open, `GU:Nudge`) or the piece wearing the
   lime handle (`GU:NudgePiece`). **Undo:** the Hub's (`GU:ActiveProfileTable`, `GU:ReapplyAll`).
 

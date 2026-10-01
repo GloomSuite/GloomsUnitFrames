@@ -29,7 +29,7 @@
 -- is no longer loaded; delete it once the owner approves these windows.
 -- ============================================================
 
-local SKIN_NEEDS = 17
+local SKIN_NEEDS = 20   -- 20: UI.gBrackets (the drag handles); 19: gDial `fine` (position dials)
 local Skin, skinMinor
 if LibStub then Skin, skinMinor = LibStub("LibGloomSkin-1.0", true) end
 local GU = _G.GloomsUnitFrames
@@ -259,9 +259,9 @@ local function buildGlobal(parent)
     function(v) local c = Cfg(); if c then c.font = (v ~= "") and v or nil; apply() end end)
   attachTip(font.control, "Default font", "What every text on this unit draws in unless it picks its own in Texts.")
   place(font, 0, 41)
-  local x = Dial(f, 170, { label = "Horizontal Position", min = -2500, max = 2500, step = 1, unit = "px", dragPx = 5000, get = num("x", 0), set = setNum("x") })
+  local x = Dial(f, 170, { fine = true, label = "Horizontal Position", min = -2500, max = 2500, step = 1, unit = "px", dragPx = 5000, get = num("x", 0), set = setNum("x") })
   place(x, 190, 0)
-  local y = Dial(f, 170, { label = "Vertical Position", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = num("y", 0), set = setNum("y") })
+  local y = Dial(f, 170, { fine = true, label = "Vertical Position", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = num("y", 0), set = setNum("y") })
   place(y, 190, 41)
   local strata = Drop(f, "Strata", 170,
     function() local c = Cfg(); return STRATA_LABEL[(c and c.strata) or "MEDIUM"] or "Medium" end,
@@ -500,8 +500,8 @@ local function buildTexts(parent)
   w.maxWidth = Dial(f, 170, { label = "Max Width", min = 0, max = 600, step = 1, unit = "px", dragPx = 900, get = tget("maxWidth", 0), set = tset("maxWidth") })
   attachTip(w.maxWidth.strip, "Max width", "Longer text is cut with … past this width. 0 = no limit.")
   w.shadow = Switch(f, "Drop Shadow", 170, OFFON, tget("shadow", true), tset("shadow"))
-  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("x", 0), set = tset("x") })
-  w.y = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("y", 0), set = tset("y") })
+  w.x = Dial(f, 170, { fine = true, label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("x", 0), set = tset("x") })
+  w.y = Dial(f, 170, { fine = true, label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = tget("y", 0), set = tset("y") })
   w.layer = LayerRow(f, function() return (TextCfg()) end,
     function(t) return GU:TextOwnLayer(t) end,
     function(t) local fr = GU:Frame(selected); t.ownLayer = true; t.strata = t.strata or (fr and fr:GetFrameStrata()) or "MEDIUM"; t.level = t.level or 70 end,
@@ -695,9 +695,9 @@ local function buildAuras(parent)
   w.swipe = Switch(f, "Cooldown Swipe", 170, OFFON, aget("swipe", true), aset("swipe"))
   attachTip(w.swipe.control, "Cooldown swipe", "A dark sweep across the icon as the aura runs down. Drawn by the game engine.")
   w.size = Dial(f, 170, { label = "Icon Size", min = 10, max = 96, step = 1, unit = "px", dragPx = 400, get = aget("size", 28), set = aset("size") })
-  w.x = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("x", 0), set = aset("x") })
+  w.x = Dial(f, 170, { fine = true, label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("x", 0), set = aset("x") })
   w.max = Dial(f, 170, { label = "Max Icons", min = 1, max = 40, step = 1, dragPx = 300, get = aget("max", 8), set = aset("max") })
-  w.y = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("y", 0), set = aset("y") })
+  w.y = Dial(f, 170, { fine = true, label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = aget("y", 0), set = aset("y") })
   w.perLine = Dial(f, 170, { label = "Icons Per Row", min = 1, max = 40, step = 1, dragPx = 300, get = aget("perLine", 8), set = aset("perLine") })
   attachTip(w.perLine.strip, "Icons per row", "The row wraps after this many; 1 makes a column.")
   w.spacing = Dial(f, 170, { label = "Icon Spacing", min = 0, max = 20, step = 1, unit = "px", dragPx = 200, get = aget("spacing", 3), set = aset("spacing") })
@@ -863,8 +863,8 @@ local function buildRing(parent, key, title, kind)
     local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; return orDefault(t[field], 0) end end
   local function offSet(field) return function(v) local rc = RingCfg(key); if not rc then return end
     local t = (rc.mode == "bar" and rc.bar) and rc.bar or rc; t[field] = v; apply() end end
-  w.dx = Dial(f, 170, { label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dx"), set = offSet("dx") })
-  w.dy = Dial(f, 170, { label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dy"), set = offSet("dy") })
+  w.dx = Dial(f, 170, { fine = true, label = "Horizontal Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dx"), set = offSet("dx") })
+  w.dy = Dial(f, 170, { fine = true, label = "Vertical Offset", min = -1500, max = 1500, step = 1, unit = "px", dragPx = 3000, get = offGet("dy"), set = offSet("dy") })
   -- ROUNDED ENDS (Rectangle bars) and GLOSS (every bar), 2026-09-29. The ends
   -- read Left / Right on a flat bar and Bottom / Top on a standing one; stored
   -- as start / end.
@@ -1107,6 +1107,9 @@ local function buildRing(parent, key, title, kind)
     w.kick = Switch(f, "Color by Interrupt State", 170, OFFON, rget("kickAware", true), rsetR("kickAware"))
     attachTip(w.kick.control, "Color by interrupt state", "Target only. The bar takes one of the colors below by whether the cast can be interrupted and whether your interrupt is ready. Solid colors — a gradient is set aside while this is on.")
     w.drains = Switch(f, "Channels Drain", 170, OFFON, rget("channelDrains", true), rset("channelDrains"))
+    -- the player only: Blizzard's own cast bar (2026-09-30)
+    w.blizz = Switch(f, "Hide Blizzard's Cast Bar", 170, OFFON, rget("hideBlizzard", true), rset("hideBlizzard"))
+    attachTip(w.blizz.control, "Hide Blizzard's cast bar", "Player only. On: the game's own cast bar never shows while this cast display is on — so only this one does. Off: it's left alone. Doesn't need any other addon.")
     attachTip(w.drains.control, "Channels drain", "A channeled spell empties the bar as it runs down; a cast fills it. Off: both fill.")
     -- the five interrupt colors: a 15 disc, 10 on the words; the last two are
     -- OPTIONAL — "(Remove)" turns that feature off, clicking the disc brings it back.
@@ -1214,6 +1217,8 @@ local function buildRing(parent, key, title, kind)
     if isCast then
       t[#t + 1] = row({ w.kick, 0 }, { w.drains, 190 })
       t[#t + 1] = { cells = { { w.kickRows, 0 } }, h = 99 }
+      t[#t + 1] = GAP
+      t[#t + 1] = row({ w.blizz, 0 })
     end
     if isHealth or isPower then t[#t + 1] = row({ w.shift, 0 }, { w.mid, 127 }, { w.low, 253 })
     elseif isResource then t[#t + 1] = row({ w.brkOn, 0 }, { w.brkAt, 112 }, { w.brkColor, 268 }) end
@@ -1258,6 +1263,7 @@ local function buildRing(parent, key, title, kind)
     if w.shift then local on = rc.shift and true or false; w.mid:setEnabled(on); w.low:setEnabled(on) end
     if w.brkOn then local on = rc.breakEnabled and true or false; w.brkAt:setEnabled(on); w.brkColor:setEnabled(on) end
     if w.kick then w.kickRows:setEnabled(rc.kickAware and true or false) end
+    if w.blizz then w.blizz:setEnabled(selected == "player" and rc.enabled ~= false) end
     setHeight(f, h)
   end
   return f
