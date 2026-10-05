@@ -118,6 +118,23 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
 - **Nudges:** the Hub's arrow keys move the unit (Global open, `GU:Nudge`) or the piece wearing the
   lime handle (`GU:NudgePiece`). **Undo:** the Hub's (`GU:ActiveProfileTable`, `GU:ReapplyAll`).
 
+## ★ 2026-10-01 → 04 — per-spec count, charged points, clicks, the seam
+- **Color Change at (per spec):** `rc.breakAtSpec[specID]` overrides `rc.breakAt` (`GU.BreakAt` /
+  `GU.SetBreakAt`); the dial sets the CURRENT spec's and names it. The first "master profile + per-spec
+  override" — the owner may want more of these (Hub BACKLOG "Not open").
+- **Charged points** (`chargedEnabled`, default on; `chargedColor`): `GetUnitChargedPowerPoints` reads
+  PLAIN in combat (Hub FINDINGS §28); `UNIT_POWER_POINT_CHARGE` re-lays the player. A charged segment
+  is solid `chargedColor`, over the color change too. `/gu charged` is the check.
+- **Clicks:** a SECURE unit button per unit (`ApplyClicker`) over the unit's box — `*type1 = target`,
+  `*type2 = togglemenu` (Blizzard's menu), and @mouseover sees the unit. Size / place / strata out of
+  combat only (`clickPending` → PLAYER_REGEN_ENABLED); show / hide by a STATE DRIVER mirroring Show
+  When (the target's only while one exists). Mouse off while the tab is moving that unit.
+- **The seam** (bar fills): only the SOLID end pieces overlap the fill by a pixel; the fill's gloss /
+  gradient clips stop a pixel short (the overlap drew them twice — FINDINGS §21). A faint flicker on a
+  moving fill is accepted.
+- **Grow From is hidden on Resource** (the engine never applies it there).
+
+## Shape
 ## Shape
 
 - **`GloomsUnitFrames.lua` — the ENGINE.** Defaults, `GloomsUnitFramesDB` **v2 — PROFILES**

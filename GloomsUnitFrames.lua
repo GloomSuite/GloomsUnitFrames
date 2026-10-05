@@ -171,6 +171,9 @@ local function ResourceDefaults()
         resourceColor = true,         -- the game's colour for that resource
         -- At `breakAt` points or more, every segment turns `breakColor`.
         breakEnabled = false, breakAt = 5, breakColor = { 0.2, 1.0, 0.4 },
+        -- CHARGED points (a rogue's supercharged combo points): those points
+        -- wear `chargedColor`, over the fill color and the color change alike.
+        chargedEnabled = true, chargedColor = { 0.25, 0.7, 1.0 },
     })
 end
 
@@ -261,6 +264,8 @@ local frames      = {}   -- per unit: the ring frame
 local anchors     = {}   -- per unit: the draggable anchor (tab open only)
 local ghosts      = {}   -- per unit: outline shown while the tab edits it
 local editing     = nil
+local clickers    = {}   -- per unit: the secure click layer (target / menu)
+local clickPending = false
 local listeners   = {}
 local Skin        -- LibGloomSkin, resolved lazily (fonts for the centre text)
 
@@ -973,6 +978,30 @@ GU.BarBox = BarBox
 -- where that edge's middle sits. This is how far the bar's CENTRE lies from
 -- that point (plus the silhouette's own box offset, BarBox's ox / oy) — what
 -- the holder is placed by. The unit box and the drag keep working in centres.
+-- ★ PER-SPEC COLOR CHANGE (2026-10-01, the owner: Assassination spends at 5
+-- combo points, Subtlety at 6). `rc.breakAtSpec[specID]` overrides the shared
+-- `rc.breakAt` for that spec; the dial writes the CURRENT spec's. A spec never
+-- set uses the shared value, so nothing saved changed meaning. ApplyLayout
+-- runs on PLAYER_SPECIALIZATION_CHANGED, which re-reads it. The first of what
+-- may become a "master profile + per-spec overrides" scheme (the owner's idea).
+function GU.SpecID()
+    local i = GetSpecialization and GetSpecialization()
+    if not i then return nil end
+    local id, name = GetSpecializationInfo(i)
+    return id, name
+end
+function GU.BreakAt(rc)
+    local sid = GU.SpecID()
+    local per = sid and rc.breakAtSpec and rc.breakAtSpec[sid]
+    return per or rc.breakAt or 5
+end
+function GU.SetBreakAt(rc, v)
+    local sid = GU.SpecID()
+    if not sid then rc.breakAt = v; return end
+    rc.breakAtSpec = rc.breakAtSpec or {}
+    rc.breakAtSpec[sid] = v
+end
+
 local function BarAnchorAdj(bc)
     local bw, bh, ox, oy = BarBox(bc)
     local g = bc.growFrom
@@ -1348,6 +1377,22 @@ local function NewBar(holder, detached)
         local ox = (dir == "right" and -px) or (dir == "left" and px) or 0
         local oy = (dir == "up" and -px) or (dir == "down" and px) or 0
         local function endSize(t) if vertical then t:SetSize(A, capLen + px) else t:SetSize(capLen + px, A) end end
+        -- ★ …but only the SOLID pieces may overlap. The gloss and the gradient
+        -- are see-through, so the overlap drew them twice: a one-pixel BRIGHT
+        -- line where the fill meets its end (the owner's screenshot, 2026-10-02 —
+        -- measured +129 brighter in the gloss, +9 in the gradient, nothing in the
+        -- plain colour under them). So the fill's gloss / gradient clips stop that
+        -- pixel short, and the end's own masked gloss / gradient covers it alone.
+        do
+            local sx, sy = ends and ox or 0, ends and oy or 0
+            local early = (dir == "left" or dir == "up")
+            for _, pair in ipairs({ { self.gradClip, self.layers.grad }, { self.glossClip, self.layers.gloss } }) do
+                local clip, tex = pair[1], pair[2]:GetStatusBarTexture()
+                clip:ClearAllPoints()
+                clip:SetPoint("TOPLEFT", tex, "TOPLEFT", early and sx or 0, early and sy or 0)
+                clip:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT", early and 0 or sx, early and 0 or sy)
+            end
+        end
         local edgeTex = self.layers.base:GetStatusBarTexture()
         -- THE FILL END
         self.endGate:SetFrameLevel(lv + #LAYERS + 1)
@@ -1963,6 +2008,45 @@ local function UnitExtent(cfg)
     return ext
 end
 
+-- ★ CLICKS (2026-10-01, the owner: EllesmereUI's frames open Blizzard's unit
+-- menu on a right-click; ours took no clicks at all). A SECURE unit button
+-- over the unit's box: left-click targets, right-click opens Blizzard's own
+-- menu (`togglemenu`), and @mouseover macros see the unit. It is protected, so
+-- its size / place / strata change only out of combat (re-applied at regen),
+-- and its show / hide is a STATE DRIVER — the game shows it under the same
+-- conditions as the frame (Show When; the target's only while one exists),
+-- in combat too. Off while the tab is moving the unit, so the drag reaches it.
+local CLICK_SHOW = {
+    always = "show", combat = "[combat] show; hide", target = "[@target,exists] show; hide",
+    combat_or_target = "[combat] show; [@target,exists] show; hide", never = "hide",
+}
+local function ApplyClicker(which, bb)
+    local f, cfg = frames[which], db and db[which]
+    if not (f and cfg) then return end
+    if InCombatLockdown() then clickPending = true; return end
+    local b = clickers[which]
+    if not b then
+        b = CreateFrame("Button", "GloomsUnitFrames_" .. which .. "Click", UIParent, "SecureUnitButtonTemplate")
+        b:SetAttribute("unit", which)
+        b:SetAttribute("*type1", "target")
+        b:SetAttribute("*type2", "togglemenu")
+        b:RegisterForClicks("AnyUp")
+        clickers[which] = b
+    end
+    b:SetFrameStrata(cfg.strata or "MEDIUM")
+    b:SetFrameLevel(cfg.level or 10)
+    b:ClearAllPoints()
+    b:SetSize(math.max(20, bb[2] - bb[1]), math.max(20, bb[4] - bb[3]))
+    b:SetPoint("CENTER", UIParent, "CENTER", cfg.x + f.bbX, cfg.y + f.bbY)
+    b:EnableMouse(editing ~= which)
+    local cond = CLICK_SHOW[cfg.showCondition or "always"] or "show"
+    if which == "target" and cond ~= "hide" then cond = "[@target,noexists] hide; " .. cond end
+    if b.gbCond ~= cond then
+        RegisterStateDriver(b, "visibility", cond)
+        b.gbCond = cond
+    end
+end
+
 -- Geometry + static styling from the config. Plain numbers only.
 function GU:ApplyLayout(which)
     local f, cfg = frames[which], db and db[which]
@@ -2113,6 +2197,8 @@ function GU:ApplyLayout(which)
     local g = ghosts[which]
     g:ClearAllPoints(); g:SetSize(math.max(20, bb[2] - bb[1]), math.max(20, bb[4] - bb[3]))
     g:SetPoint("CENTER", UIParent, "CENTER", cfg.x + f.bbX, cfg.y + f.bbY)
+    f.bb = bb
+    ApplyClicker(which, bb)
 
     EnsureTexts(cfg)
     self:LayoutTexts(f, cfg)
@@ -2174,6 +2260,27 @@ if EventRegistry and EventRegistry.RegisterCallback then
     EventRegistry:RegisterCallback("EditMode.Exit", function() GU:ApplyBlizzardCastBar() end, GU)
 end
 
+-- ★ CHARGED POINTS (2026-10-02, the owner: Subtlety's supercharged combo
+-- points, which Blizzard's bar and EllesmereUI colour). The game lists the
+-- charged point POSITIONS (GetUnitChargedPowerPoints) and fires
+-- UNIT_POWER_POINT_CHARGE when that changes — a re-layout, which re-colours
+-- the segments. `SUSPECTED` plain on 12.1 (positions, not amounts): if the
+-- list or an entry comes back SECRET it is ignored (`GU.chargedSecret` set,
+-- `/gu charged` reports it) rather than compared.
+local function ChargedSet()
+    if not GetUnitChargedPowerPoints then return nil end
+    local ok, list = pcall(GetUnitChargedPowerPoints, "player")
+    if not ok or type(list) ~= "table" then return nil end
+    if issecretvalue and issecretvalue(list) then GU.chargedSecret = true; return nil end
+    local set
+    for _, v in ipairs(list) do
+        if issecretvalue and issecretvalue(v) then GU.chargedSecret = true; return nil end
+        set = set or {}; set[v] = true
+    end
+    return set
+end
+GU.ChargedSet = ChargedSet
+
 -- The resource ring: N segments around the arc, each owning one point's
 -- worth of the value (segment i answers to [ (i-1)/N, i/N ]), separated by
 -- `gap` degrees. Unused segments hide.
@@ -2198,7 +2305,7 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
     -- breakColor — the `low` layer, given a step profile at that count (the
     -- `mid` layer is parked off). Same overall percent, same step, so all
     -- segments switch together.
-    local brk = rc.breakEnabled and n and clamp(rc.breakAt or 5, 1, n) or nil
+    local brk = rc.breakEnabled and n and clamp(GU.BreakAt(rc), 1, n) or nil
     local profiles
     if brk then
         local thr = brk / n
@@ -2209,6 +2316,23 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
     end
     local tc = rc.trackColor or { 1, 1, 1 }
     local isBar = rc.mode == "bar" and rc.bar
+    local charged = (rc.chargedEnabled ~= false) and ChargedSet() or nil
+    local cc = rc.chargedColor or { 0.25, 0.7, 1.0 }
+    -- one segment's colours: a charged point is solid chargedColor, and stays
+    -- so past the color change
+    local function paint(seg, i)
+        if charged and charged[i] then
+            seg:SetSolid(cc)
+            if brk then seg:SetColor("low", cc[1], cc[2], cc[3]); seg:SetColor("mid", cc[1], cc[2], cc[3]) end
+            return
+        end
+        if rc.colorMode == "gradient" then seg:SetGradient(color, rc.color2, rc.gradientAngle)
+        else seg:SetSolid(color) end
+        if brk then
+            local bc = rc.breakColor
+            seg:SetColor("low", bc[1], bc[2], bc[3]); seg:SetColor("mid", bc[1], bc[2], bc[3])
+        end
+    end
     if isBar then
         -- BAR MODE: n copies of the silhouette in a row; segment i is whole
         -- once the value reaches i/n. The holder takes the row's extent.
@@ -2236,12 +2360,7 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
                 b:SetShown(true)
                 b:SetShift(brk ~= nil)
                 b:SetTrack(tc, rc.trackAlpha or 0.12)
-                if rc.colorMode == "gradient" then b:SetGradient(color, rc.color2, rc.gradientAngle)
-                else b:SetSolid(color) end
-                if brk then
-                    local bc = rc.breakColor
-                    b:SetColor("low", bc[1], bc[2], bc[3]); b:SetColor("mid", bc[1], bc[2], bc[3])
-                end
+                paint(b, i)
             else
                 b:SetShown(false)
             end
@@ -2267,13 +2386,7 @@ function GU:LayoutResource(which, rc, r, art, ramp, inner)
             ConfigureOutline(sg.outline, r.outlineHolder, g, rc)
             sg.track:SetColor("base", tc[1], tc[2], tc[3])
             sg.track:SetFromPlain(1, rc.trackAlpha or 0.12)
-            if rc.colorMode == "gradient" then sg.fill:SetGradient(color, rc.color2, rc.gradientAngle)
-            else sg.fill:SetSolid(color) end
-            if brk then
-                local bc = rc.breakColor
-                sg.fill:SetColor("low", bc[1], bc[2], bc[3])
-                sg.fill:SetColor("mid", bc[1], bc[2], bc[3])
-            end
+            paint(sg.fill, i)
         end
     end
 end
@@ -2983,6 +3096,10 @@ function GU:SetEditing(which)
         local on = (u == which)
         anchors[u]:EnableMouse(on)
         ghosts[u]:SetShown(on)
+        local b = clickers[u]
+        if b then
+            if InCombatLockdown() then clickPending = true else b:EnableMouse(not on) end
+        end
     end
     UpdateVisibility()
 end
@@ -3003,6 +3120,7 @@ ev:RegisterUnitEvent("UNIT_HEALTH", "player", "target")
 ev:RegisterUnitEvent("UNIT_MAXHEALTH", "player", "target")
 ev:RegisterUnitEvent("UNIT_POWER_UPDATE", "player", "target")
 ev:RegisterUnitEvent("UNIT_MAXPOWER", "player", "target")
+pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_POINT_CHARGE", "player")   -- charged combo points (pcall: an unknown event errors)
 ev:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player", "target")
 ev:RegisterEvent("RUNE_POWER_UPDATE")   -- a DK's rune readiness (no unit arg; player only)
 ev:RegisterUnitEvent("UNIT_FACTION", "player", "target")   -- reaction / tap changes
@@ -3062,10 +3180,16 @@ ev:SetScript("OnEvent", function(_, event, unit)
         UpdateVisibility()
         if event == "PLAYER_TARGET_CHANGED" then GU:RefreshAuras(frames.target) end
         if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ENTERING_WORLD" then GU:ApplyBlizzardCastBar() end
+        if event == "PLAYER_REGEN_ENABLED" and clickPending then
+            clickPending = false
+            for _, u in ipairs(GU.UNITS) do if frames[u] and frames[u].bb then ApplyClicker(u, frames[u].bb) end end
+        end
     elseif event == "SPELLS_CHANGED" or (event == "UNIT_PET" and unit == "player") then
         RefreshKick()
     elseif event == "RUNE_POWER_UPDATE" then
         if initialised and frames.player:IsShown() then GU:Refresh("player") end
+    elseif event == "UNIT_POWER_POINT_CHARGE" then
+        if initialised then GU:ApplyLayout("player") end   -- re-colours the charged points
     elseif event == "UNIT_MAXPOWER" and unit == "player" or event == "PLAYER_SPECIALIZATION_CHANGED"
         or event == "UPDATE_SHAPESHIFT_FORM" then
         RefreshKick()
@@ -3233,6 +3357,19 @@ SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
         return
     end
     if msg == "probe" then ProbeAbsorb() return end
+    if msg == "charged" then
+        -- the in-game check for charged points: is the list readable, in combat too?
+        local ok, list = pcall(GetUnitChargedPowerPoints or function() return nil end, "player")
+        local secret = ok and issecretvalue and list ~= nil and issecretvalue(list)
+        local parts = {}
+        if ok and type(list) == "table" and not secret then
+            for _, v in ipairs(list) do parts[#parts + 1] = (issecretvalue and issecretvalue(v)) and "SECRET" or tostring(v) end
+        end
+        Chat(("charged: api=%s  ok=%s  secret=%s  points={%s}  inCombat=%s  everSecret=%s"):format(
+            tostring(GetUnitChargedPowerPoints ~= nil), tostring(ok), tostring(secret), table.concat(parts, ","),
+            tostring(InCombatLockdown()), tostring(GU.chargedSecret or false)))
+        return
+    end
     if msg == "auras" then
         Chat(("auras: blizzard container addon loaded=%s  createFailed=%s  layoutError=%s  decorateError=%s"):format(
             tostring(C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer")), tostring(GU.aurasFailed or 0), tostring(GU.aurasError), tostring(GU.decorateError)))

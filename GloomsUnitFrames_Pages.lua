@@ -1098,9 +1098,20 @@ local function buildRing(parent, key, title, kind)
   -- the resource's color change at a point count
   if isResource then
     w.brkOn = Switch(f, "Color Change", 92, OFFON, rget("breakEnabled", false), rsetR("breakEnabled"))
-    attachTip(w.brkOn.control, "Color change", "Every segment turns the color beside it once you have at least this many points.")
-    w.brkAt = Dial(f, 136, { label = "Color Change at Point Count", min = 1, max = 7, step = 1, dragPx = 200, get = rget("breakAt", 5), set = rset("breakAt") })
+    attachTip(w.brkOn.control, "Color change", "Every segment turns the color beside it once you have at least this many points. The point count is kept per specialization — it sets the one you're in now.")
+    -- per spec (GU.BreakAt): the label names the spec the dial is setting
+    w.brkAt = Dial(f, 136, { label = "Color Change at Point Count", min = 1, max = 7, step = 1, dragPx = 200,
+      get = function()
+        local rc = RingCfg(key)
+        local _, spec = GU.SpecID()
+        if w.brkAt and w.brkAt.label then w.brkAt.label:SetText(spec and ("Color Change at (" .. spec .. ")") or "Color Change at Point Count") end
+        return rc and GU.BreakAt(rc) or 5
+      end,
+      set = function(v) local rc = RingCfg(key); if rc then GU.SetBreakAt(rc, v); apply() end end })
     w.brkColor = Color(f, "Change Color To", 92, { required = true, get = rget("breakColor"), set = rset("breakColor") })
+    w.chgOn = Switch(f, "Charged Points", 92, OFFON, rget("chargedEnabled", true), rsetR("chargedEnabled"))
+    attachTip(w.chgOn.control, "Charged points", "Points the game marks as charged — a rogue's supercharged combo points — take the color beside it while they're charged, over the fill color and the color change.")
+    w.chgColor = Color(f, "Charged Color", 92, { required = true, get = rget("chargedColor", { 0.25, 0.7, 1.0 }), set = rset("chargedColor") })
   end
   -- the cast: interrupt state and channels
   if isCast then
@@ -1159,6 +1170,9 @@ local function buildRing(parent, key, title, kind)
   for _, v in ipairs({ w.layer.own, w.layer.strata, w.layer.level }) do all[#all + 1] = v end
 
   -- THE ROWS, per face
+  -- Grow From is hidden on Resource (the engine never applies it there —
+  -- `key ~= "resource"` in GloomsUnitFrames.lua). Written `(not r) and x or
+  -- nil`: the old `r and nil or x` always gave x, so it showed (2026-10-01).
   local function rows()
     local bar, rect = isBar(), isRect()
     local t = { row({ w.enabled, 0 }, { w.mode, 127 }, { w.shape, 253 }) }
@@ -1166,11 +1180,11 @@ local function buildRing(parent, key, title, kind)
       if rect then
         t[#t + 1] = row({ w.bwidth, 0 }, { w.dx, 190 })
         t[#t + 1] = row({ w.bheight, 0 }, { w.dy, 190 })
-        t[#t + 1] = row({ w.rot, 0 }, isResource and nil or { w.grow, 190 })
+        t[#t + 1] = row({ w.rot, 0 }, (not isResource) and { w.grow, 190 } or nil)
       else
         t[#t + 1] = row({ w.swidth, 0 }, { w.link, 173 }, { w.dx, 190 })
         t[#t + 1] = row({ w.sheight, 0 }, { w.dy, 190 })
-        t[#t + 1] = row({ w.rot, 0 }, isResource and nil or { w.grow, 190 })
+        t[#t + 1] = row({ w.rot, 0 }, (not isResource) and { w.grow, 190 } or nil)
       end
     else
       t[#t + 1] = row({ w.asize, 0 }, { w.dx, 190 })
@@ -1221,7 +1235,10 @@ local function buildRing(parent, key, title, kind)
       t[#t + 1] = row({ w.blizz, 0 })
     end
     if isHealth or isPower then t[#t + 1] = row({ w.shift, 0 }, { w.mid, 127 }, { w.low, 253 })
-    elseif isResource then t[#t + 1] = row({ w.brkOn, 0 }, { w.brkAt, 112 }, { w.brkColor, 268 }) end
+    elseif isResource then
+      t[#t + 1] = row({ w.brkOn, 0 }, { w.brkAt, 112 }, { w.brkColor, 268 })
+      t[#t + 1] = row({ w.chgOn, 0 }, { w.chgColor, 112 })
+    end
     t[#t + 1] = GAP
     t[#t + 1] = w.layer:row()
     return t
@@ -1262,6 +1279,7 @@ local function buildRing(parent, key, title, kind)
     w.gradAngle:setEnabled(grad); w.color2:setEnabled(grad)
     if w.shift then local on = rc.shift and true or false; w.mid:setEnabled(on); w.low:setEnabled(on) end
     if w.brkOn then local on = rc.breakEnabled and true or false; w.brkAt:setEnabled(on); w.brkColor:setEnabled(on) end
+    if w.chgOn then w.chgColor:setEnabled(rc.chargedEnabled ~= false) end
     if w.kick then w.kickRows:setEnabled(rc.kickAware and true or false) end
     if w.blizz then w.blizz:setEnabled(selected == "player" and rc.enabled ~= false) end
     setHeight(f, h)
