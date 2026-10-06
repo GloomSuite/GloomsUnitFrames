@@ -118,6 +118,31 @@ absorbmax/shift/solid/grad/strata/level/row/rowgap` is the QA command; keep it. 
 - **Nudges:** the Hub's arrow keys move the unit (Global open, `GU:Nudge`) or the piece wearing the
   lime handle (`GU:NudgePiece`). **Undo:** the Hub's (`GU:ActiveProfileTable`, `GU:ReapplyAll`).
 
+## ★ 2026-10-05 — FIVE UNITS, END SHAPES, FILL TEXTURES, HIDE WHEN MOUNTED
+- **Focus, Target of Target, Pet** (`GU.UNITS`, `GU.SMALL`): health, power, texts and a cast BAR (forced
+  `mode = "bar"` in PrepareProfile / CopyFrom — never a ring), no auras (`cfg.auras = {}`), no resource.
+  `SmallUnitDefaults` = three stacked rectangle bars + name / hp% texts. A second event frame registers
+  focus / pet (RegisterUnitEvent takes two units); the TARGET OF TARGET has no unit events — a 0.2 s
+  ticker re-reads it, UNIT_TARGET of the target re-checks its existence. Every unit but the player
+  shows only while it EXISTS (the clicker: `[@unit,noexists] hide`). Kick colours: `GU.KICK_UNITS` =
+  target + focus. A running preview carries on (the ToT ticker restarted it every 0.2 s). The selector:
+  two buttons a row, h 159; Copy Settings From is a dropdown; anchors `uf:focus / uf:targettarget / uf:pet`.
+- **Tooltip** on the click layer (`GameTooltip:SetUnit`); the click box = **health + power only** (`f.cbb`)
+  — a resource row moved mid-screen made everything between answer as the player.
+- **Hide When Mounted** (Global): `IsMountedNow()` in UpdateVisibility + `MountedCond()` on the clicker.
+- **Shaped Ends + End Shape** (`bar.roundEnds` + `bar.endShape` round | angled | point; the label is
+  "Shaped Ends"): cap masks from `fill/cap-<shape>-<side>.png` (inner edge SOLID — Hub FINDINGS §30).
+  `GU.FarEndSquare(bc)`: one-sided Shaped Ends that leave out the end the fill runs TOWARD keep that
+  end square — no track / absorb cut, the layers keep the whole box and endGate CLIPS the tip. An
+  angled Fill End beside an angled End Shape uses `end-angledpar-*` (turned, not mirrored: parallel).
+- **The gradient's moving edge** is `gradMask` (a mask on the grad texture, 1024² white); `gradClip`
+  holds the box and no longer clips — the first-cast-after-/reload fault, Hub FINDINGS §31.
+- **Fill Texture** (`bar.fillTexture`, an LSM statusbar name; Rectangle only; the TRACK stays plain):
+  the colour layers' textures; a Fill End's base / mid / low pieces become the texture laid STILL over
+  the fill's rectangle + capLen (coords stretched to match the crop) and cut by `endMask`. Gloss sits
+  beside it. **Untested in game** (the tip's join; vertical bars assume the crop direction).
+- `/gu endprobe` (kept, the owner) reports the cast bar's end piece, colours and rectangles.
+
 ## ★ 2026-10-01 → 04 — per-spec count, charged points, clicks, the seam
 - **Color Change at (per spec):** `rc.breakAtSpec[specID]` overrides `rc.breakAt` (`GU.BreakAt` /
   `GU.SetBreakAt`); the dial sets the CURRENT spec's and names it. The first "master profile + per-spec

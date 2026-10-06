@@ -5,6 +5,12 @@ The pieces that ride a bar's moving edge (Media/art/fill/):
 
   end-angled-<r|l|t|b>.png   a FILL END: the fill's end cut on a slant —
   end-point-<r|l|t|b>.png    ... or to a point (an arrow head).
+  end-angledpar-<r|l|t|b>.png  the angled end turned half round (not mirrored):
+                             a fill running away from an ANGLED bar end leans
+                             parallel to it (End Shape, 2026-10-04).
+  cap-<angled|point>-<r|l|t|b>.png  the same ends with the INNER edge solid to
+                             the corner — the Shaped Ends' cap masks (CLAMPed
+                             along the bar; 2026-10-05).
                              64 x 128 for r / l (a flat bar's end: half as wide
                              as the bar is tall), 128 x 64 for t / b; white,
                              tinted by the engine. (The round end is the
@@ -51,6 +57,35 @@ for kind, pts in ends.items():
     t = r.transpose(Image.ROTATE_90)
     save(f"end-{kind}-t.png", t)
     save(f"end-{kind}-b.png", t.transpose(Image.FLIP_TOP_BOTTOM))
+
+# PARALLEL angled ends (2026-10-04, the owner): a fill running AWAY from an
+# angled bar end leans the SAME way as that end — the end turned half round,
+# not mirrored — so the two slants are parallel (a parallelogram).
+# end-angledpar-<side> = the opposite side's end-angled, rotated 180.
+r = poly(W, H, ends["angled"])
+t = r.transpose(Image.ROTATE_90)
+opp = {"r": r.transpose(Image.FLIP_LEFT_RIGHT), "l": r, "t": t.transpose(Image.FLIP_TOP_BOTTOM), "b": t}
+for side, img in opp.items():
+    save(f"end-angledpar-{side}.png", img.transpose(Image.ROTATE_180))
+
+# CAP versions of the angled / point ends, for a bar's SHAPED ENDS (2026-10-05):
+# the same shape with the inner edge (the side toward the bar) fully opaque to
+# the corner. A cap mask is CLAMPed along the whole bar, so the anti-aliased
+# corner pixel of the end art became a half-strength row along the bar's edge.
+def solid_inner(img, side):
+    px = img.load(); w, h = img.size
+    if side in ("r", "l"):
+        x = 0 if side == "r" else w - 1
+        for y in range(h): px[x, y] = 255
+    else:
+        y = h - 1 if side == "t" else 0
+        for x in range(w): px[x, y] = 255
+    return img
+for kind, pts in ends.items():
+    r = poly(W, H, pts)
+    t = r.transpose(Image.ROTATE_90)
+    for side, img in (("r", r), ("l", r.transpose(Image.FLIP_LEFT_RIGHT)), ("t", t), ("b", t.transpose(Image.FLIP_TOP_BOTTOM))):
+        save(f"cap-{kind}-{side}.png", solid_inner(img.copy(), side))
 
 # markers
 N = 128

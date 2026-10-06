@@ -45,7 +45,7 @@ local DIM = UI.G_DIM or 0.3
 local LIME_HEX = ("%02x%02x%02x"):format(LIME.r * 255, LIME.g * 255, LIME.b * 255)
 local attachTip = UI.attachTip
 
-local UNIT_LABEL = { player = "Player", target = "Target" }
+local UNIT_LABEL = GU.UNIT_LABEL
 local selected = "player"
 local P = { secs = {} }          -- every built section: { frame, refresh }
 
@@ -208,14 +208,20 @@ end
 P.SelectUnit = SelectUnit
 
 local function buildSelector(c)
+  -- five units (2026-10-05): two to a row like the mock's Player | Target —
+  -- Focus | Target of Target, then Pet — each row 27 down; 98 × 23, 4 apart
   for i, which in ipairs(GU.UNITS) do
     local b = UI.gButton(c, UNIT_LABEL[which], { w = 98, h = 23, size = 10, onClick = function() SelectUnit(which) end })
-    b:SetPoint("TOPLEFT", 20 + (i - 1) * 102, -52)
+    local col, line = (i - 1) % 2, math.floor((i - 1) / 2)
+    b:SetPoint("TOPLEFT", 20 + col * 102, -52 - line * 27)
     b:SetSelected(which == selected)
     unitBtns[which] = b
   end
   attachTip(unitBtns.player, "Player", "Edit the player frame. While these windows are open it can be dragged on screen; the green outline is its frame.")
   attachTip(unitBtns.target, "Target", "Edit the target frame. It shows empty until you have a target; while these windows are open it can be dragged on screen.")
+  attachTip(unitBtns.focus, "Focus", "Edit the focus frame: health, power, texts and a cast bar. It shows only while you have a focus (empty while you edit it).")
+  attachTip(unitBtns.targettarget, "Target of Target", "Edit the frame for whoever your target is targeting: health, power, texts and a cast bar. It shows only while there is one.")
+  attachTip(unitBtns.pet, "Pet", "Edit the pet frame: health, power, texts and a cast bar. It shows only while you have a pet out.")
 end
 
 -- ===========================================================================
@@ -232,7 +238,7 @@ local function buildTab(tab)
 end
 
 -- ===========================================================================
--- SECTION · GLOBAL <UNIT> SETTINGS (the mock's Frame 573, 179 tall)
+-- SECTION · GLOBAL <UNIT> SETTINGS (the mock's Frame 573, 179 tall; 220 with Hide When Mounted, 2026-10-04)
 -- ===========================================================================
 local COND = {
   { "always", "Always" }, { "combat", "In Combat" }, { "target", "Show When Target Is Selected" },
@@ -242,7 +248,7 @@ local COND_LABEL = {}
 for _, c in ipairs(COND) do COND_LABEL[c[1]] = c[2] end
 
 local function buildGlobal(parent)
-  local f, s = Section(parent, 179)
+  local f, s = Section(parent, 220)
   local function num(field, default) return function() local c = Cfg(); return c and orDefault(c[field], default) end end
   local function setNum(field) return function(v) local c = Cfg(); if c then c[field] = v; apply() end end end
   local cond = Drop(f, "Visibility", 170,
@@ -273,24 +279,38 @@ local function buildGlobal(parent)
   local level = Dial(f, 170, { label = "Level", min = 0, max = 200, step = 1, dragPx = 600, get = num("level", 10), set = setNum("level") })
   attachTip(level.strip, "Level", "Higher draws in front — tuck the frame behind or in front of an overlay on the same strata.")
   place(level, 190, 102)
-  -- Copy Settings from <the other unit> · Reset to Defaults (both ask first)
-  local copy = Button(f, "", 175, function()
-    local from = (selected == "player") and "target" or "player"
-    UI.confirm(("Copy the %s frame's settings onto the %s frame? Position stays as it is."):format(UNIT_LABEL[from]:lower(), UNIT_LABEL[selected]:lower()),
-      function() GU:CopyFrom(selected, from); P.refreshAll() end, "Copy")
-  end)
-  copy:SetPoint("TOPLEFT", 0, -163)
-  attachTip(copy, "Copy settings", "Layer, visibility, texts and every ring the two share — sizes, angles, colors, rounding. Position is left alone. Asks first.")
+  -- Copy Settings From <a unit> (a list since there are five, 2026-10-05) ·
+  -- Reset to Defaults — both ask first
+  local copy = Drop(f, "Copy Settings From", 170,
+    function() return "Choose" end,
+    function()
+      local o = {}
+      for _, u in ipairs(GU.UNITS) do if u ~= selected then o[#o + 1] = { value = u, label = UNIT_LABEL[u] } end end
+      return o
+    end,
+    function() return nil end,
+    function(from)
+      UI.confirm(("Copy the %s frame's settings onto the %s frame? Position stays as it is."):format(UNIT_LABEL[from]:lower(), UNIT_LABEL[selected]:lower()),
+        function() GU:CopyFrom(selected, from); P.refreshAll() end, "Copy")
+    end)
+  attachTip(copy.control, "Copy settings", "Layer, visibility, texts and every bar or ring the two share — sizes, angles, colors, rounding. Position is left alone. Asks first.")
+  place(copy, 190, 143)
   local reset = Button(f, "Reset to Defaults", 175, function()
     UI.confirm(("Reset the %s frame to its factory position, size and rings?"):format(UNIT_LABEL[selected]:lower()),
       function() GU:Reset(selected); P.refreshAll() end, "Reset")
   end)
-  reset:SetPoint("TOPLEFT", 185, -163)
+  reset:SetPoint("TOPLEFT", 0, -204)
   attachTip(reset, "Reset to defaults", "Puts this unit back where a fresh install would have it. Asks first.")
+  -- Hide When Mounted (2026-10-04, the owner): a rule OVER Visibility, like
+  -- Gloom's Bars' and Gloom's UI's. Mounted = a mount or a druid's travel forms.
+  local mounted = Switch(f, "Hide When Mounted", 170, OFFON,
+    function() local c = Cfg(); return (c and c.hideMounted) and true or false end,
+    function(v) local c = Cfg(); if c then c.hideMounted = v or nil; GU:ApplyLayout(selected) end end)
+  attachTip(mounted.control, "Hide when mounted", "On: this frame hides while you're on a mount or in a druid's Travel or Flight Form, whatever Visibility says, and comes back when you get off.")
+  place(mounted, 0, 143)
   P.globalDials = { x, y }
   s.refresh = function()
-    for _, w in ipairs({ cond, font, x, y, strata, level }) do w:refresh() end
-    copy:SetLabel(("Copy Settings from %s"):format(selected == "player" and "TARGET" or "PLAYER"))
+    for _, w in ipairs({ cond, font, x, y, strata, level, mounted, copy }) do w:refresh() end
   end
   return f
 end
@@ -869,7 +889,7 @@ local function buildRing(parent, key, title, kind)
   -- read Left / Right on a flat bar and Bottom / Top on a standing one; stored
   -- as start / end.
   local function flatBar() local rc = RingCfg(key); local b = rc and rc.bar; return not b or (b.width or 200) >= (b.height or 24) end
-  w.ends = Drop(f, "Rounded Ends", 170,
+  w.ends = Drop(f, "Shaped Ends", 170,
     function()
       local v = bget("roundEnds")()
       local L = flatBar() and { start = "Left", ["end"] = "Right" } or { start = "Bottom", ["end"] = "Top" }
@@ -882,7 +902,18 @@ local function buildRing(parent, key, title, kind)
     end,
     function() return bget("roundEnds")() or "none" end,
     function(v) bset("roundEnds")((v ~= "none") and v or nil); R() end)
-  attachTip(w.ends.control, "Rounded ends", "Rounds a Rectangle bar's end into a half-circle as tall as the bar — it stays perfectly round at any length. On a Class Resource row, every segment gets it. Rectangle only. With a Fill End, the end the fill runs toward takes the Fill End's shape instead — track and all.")
+  attachTip(w.ends.control, "Shaped ends", "Which ends of a Rectangle bar take the End Shape — round stays perfectly round at any length. On a Class Resource row, every segment gets it. Rectangle only. With a Fill End: if the end the fill runs toward is shaped (or none are), it takes the Fill End's shape instead — track and all; if only the OTHER end is shaped, it stays square.")
+  -- END SHAPE (2026-10-04, the owner): what the Shaped Ends are — round, or the
+  -- Fill End's angled / pointed art — so an angled end can stay put while the
+  -- fill runs away from it.
+  local ESH = { { "round", "Round" }, { "angled", "Angled" }, { "point", "Point" } }
+  local ESHL = {}; for _, e in ipairs(ESH) do ESHL[e[1]] = e[2] end
+  w.endShape = Drop(f, "End Shape", 170,
+    function() return ESHL[bget("endShape")() or "round"] or "Round" end,
+    function() local o = {}; for _, e in ipairs(ESH) do o[#o + 1] = { value = e[1], label = e[2] } end; return o end,
+    function() return bget("endShape")() or "round" end,
+    function(v) bset("endShape")((v ~= "round") and v or nil); R() end)
+  attachTip(w.endShape.control, "End shape", "The shape of the Shaped Ends: a half-circle, cut on a slant, or a point — the same shapes as the Fill End.")
   w.gloss = Switch(f, "Gloss", 170, OFFON, bget("gloss", false), function(v) bset("gloss")(v or nil) end)
   attachTip(w.gloss.control, "Gloss", "A crisp white rim along the bar's top edge, curving round a rounded end — Figma's inner shadow (white 65%, 4 down, 4 blur). Over the fill, draining with it; any color. A standing bar glosses at its top end only (the light is from above).")
   -- ★ THE FILL'S END, A MARKER, SEGMENTS (2026-09-29, the owner's reference
@@ -1023,6 +1054,19 @@ local function buildRing(parent, key, title, kind)
   -- fill
   w.colorType = Switch(f, "Fill Color Type", 170, { { "solid", "Solid" }, { "gradient", "Gradient" } },
     function() local rc = RingCfg(key); return (rc and rc.colorMode) or "solid" end, rsetR("colorMode"))
+  -- FILL TEXTURE (2026-10-05, the owner): a shared bar texture under the
+  -- fill's colors — Rectangle bars only; the track stays plain
+  w.fillTex = Drop(f, "Fill Texture", 170,
+    function() local v = bget("fillTexture")(); return (v and v ~= "") and v or "None" end,
+    function()
+      local o = { { value = "", label = "None" } }
+      local lsm = LibStub and LibStub("LibSharedMedia-3.0", true)
+      if lsm then for _, name in ipairs(lsm:List("statusbar")) do o[#o + 1] = { value = name, label = name } end end
+      return o
+    end,
+    function() return bget("fillTexture")() or "" end,
+    function(v) bset("fillTexture")((v ~= "") and v or nil); R() end)
+  attachTip(w.fillTex.control, "Fill texture", "A bar texture under the fill's colors — your color tints it, so grey textures take color best. The empty track stays plain. Rectangle bars only. Textures come from your addons' shared list (the same ones EllesmereUI or Details offer).")
   w.fillDir = Drop(f, "Fill Direction", 170,
     function()
       if isBar() then
@@ -1116,7 +1160,7 @@ local function buildRing(parent, key, title, kind)
   -- the cast: interrupt state and channels
   if isCast then
     w.kick = Switch(f, "Color by Interrupt State", 170, OFFON, rget("kickAware", true), rsetR("kickAware"))
-    attachTip(w.kick.control, "Color by interrupt state", "Target only. The bar takes one of the colors below by whether the cast can be interrupted and whether your interrupt is ready. Solid colors — a gradient is set aside while this is on.")
+    attachTip(w.kick.control, "Color by interrupt state", "Target and Focus only. The bar takes one of the colors below by whether the cast can be interrupted and whether your interrupt is ready. Solid colors — a gradient is set aside while this is on.")
     w.drains = Switch(f, "Channels Drain", 170, OFFON, rget("channelDrains", true), rset("channelDrains"))
     -- the player only: Blizzard's own cast bar (2026-09-30)
     w.blizz = Switch(f, "Hide Blizzard's Cast Bar", 170, OFFON, rget("hideBlizzard", true), rset("hideBlizzard"))
@@ -1198,7 +1242,7 @@ local function buildRing(parent, key, title, kind)
     elseif not bar or isCast then
       t[#t + 1] = row({ w.roundStart, 0 }, { w.roundEnd, 190 }); t[#t + 1] = GAP
     end
-    if bar then t[#t + 1] = row({ w.ends, 0 }, { w.gloss, 190 }); t[#t + 1] = GAP end
+    if bar then t[#t + 1] = row({ w.ends, 0 }, { w.endShape, 190 }); t[#t + 1] = GAP end
     if bar and not isResource then
       t[#t + 1] = row({ w.fillEnd, 0 }, { w.marker, 190 })
       t[#t + 1] = row({ w.markerSize, 0 }, { w.markerAlign, 190 })
@@ -1222,6 +1266,7 @@ local function buildRing(parent, key, title, kind)
     end
     t[#t + 1] = row({ w.colorType, 0 }, { w.fillDir, 190 })
     t[#t + 1] = row({ w.color, 0 }, { w.gradAngle, 105 }, { w.color2, 275 })
+    if bar then t[#t + 1] = row({ w.fillTex, 0 }, { w.gloss, 190 }) end   -- the surface: texture | gloss (2026-10-05)
     -- the track: in the fill's block on Health (the drain shift its own block
     -- under it); a block of its own on Power, Resource and Cast, with the
     -- drain shift / color change / interrupt rows under it (the mocks)
@@ -1253,6 +1298,8 @@ local function buildRing(parent, key, title, kind)
     local bar = rc.mode == "bar"
     w.shape:setEnabled(bar)
     w.ends:setEnabled(bar and rc.bar and rc.bar.shape == "rect" or false)
+    w.fillTex:setEnabled(bar and rc.bar and rc.bar.shape == "rect" or false)
+    w.endShape:setEnabled(bar and rc.bar and rc.bar.shape == "rect" and rc.bar.roundEnds ~= nil or false)
     if w.fillEnd and bar and not isResource then
       local b = rc.bar or {}
       local rect, n, wh = b.shape == "rect", nseg(), whole()
@@ -1280,7 +1327,13 @@ local function buildRing(parent, key, title, kind)
     if w.shift then local on = rc.shift and true or false; w.mid:setEnabled(on); w.low:setEnabled(on) end
     if w.brkOn then local on = rc.breakEnabled and true or false; w.brkAt:setEnabled(on); w.brkColor:setEnabled(on) end
     if w.chgOn then w.chgColor:setEnabled(rc.chargedEnabled ~= false) end
-    if w.kick then w.kickRows:setEnabled(rc.kickAware and true or false) end
+    if w.kick then
+      local can = GU.KICK_UNITS[selected] and true or false
+      w.kick:setEnabled(can)
+      w.kickRows:setEnabled(can and rc.kickAware and true or false)
+    end
+    -- a small unit's cast is a bar, never a ring (the owner, 2026-10-05)
+    if isCast and GU.SMALL[selected] then w.mode:setEnabled(false) end
     if w.blizz then w.blizz:setEnabled(selected == "player" and rc.enabled ~= false) end
     setHeight(f, h)
   end
@@ -1363,13 +1416,14 @@ GloomsHub:RegisterTab{
   product  = "GloomUnitFrames",
   windows  = true,
   profile  = PROFILE_API,
-  selector = { build = buildSelector, h = 105 },
+  selector = { build = buildSelector, h = 159 },
   tab      = { w = 360, build = buildTab },
   sections = {
     { id = "global", onShow = function() P.focus = "global"; P.syncPreviews() end,   title = function() return ("Global %s Settings"):format(UNIT_LABEL[selected] or "") end, build = function(p) return focusHook(buildGlobal(p), "global") end },
     { id = "texts", onShow = function() P.focus = "texts"; P.syncPreviews() end,    title = "Texts",                     build = function(p) return focusHook(buildTexts(p), "texts") end, dim = never },
     { id = "auras", onShow = function() P.focus = "auras"; P.syncPreviews() end,    title = "Auras (Buffs & Debuffs)",   dim = never,
-      build = function(p) auraFrame = focusHook(buildAuras(p), "auras"); return auraFrame end },
+      build = function(p) auraFrame = focusHook(buildAuras(p), "auras"); return auraFrame end,
+      hidden = function() return GU.SMALL[selected] and true or false end },
     { id = "health", onShow = function() P.focus = "health"; P.syncPreviews() end,   title = "Health Bar/Ring",           build = function(p) return focusHook(buildRing(p, "health", "Health", "health"), "health") end, dim = never },
     { id = "power", onShow = function() P.focus = "power"; P.syncPreviews() end,    title = "Power Bar/Ring",            build = function(p) return focusHook(buildRing(p, "power", "Power", "power"), "power") end, dim = never },
     { id = "resource", onShow = function() P.focus = "resource"; P.syncPreviews() end, title = "Class Resource Bar/Ring",   build = function(p) return focusHook(buildRing(p, "resource", "Resource", "resource"), "resource") end, dim = never,

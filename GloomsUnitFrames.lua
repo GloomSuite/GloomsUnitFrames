@@ -227,14 +227,39 @@ end
 --                          charProfiles = { ["Name-Realm"] = name } }
 -- The engine's `db` below is the ACTIVE profile's table, so every db[which]
 -- read is unchanged; switching swaps `db` and re-applies both units.
+-- ★ THE SMALL UNITS (2026-10-05, the owner: EllesmereUI's focus / target-of-
+-- target / pet frames stopped showing, and he would rather style them here):
+-- health, power, texts and a cast BAR (never a ring) — no class resource, no
+-- auras. They start as three thin rectangle bars stacked, a name on the left
+-- and the health percent on the right; every ring setting still applies.
+local function SmallUnitDefaults(x, y)
+    local u = UnitDefaults(x, y)
+    local function bar(rc, h, dy, color)
+        rc.mode = "bar"
+        rc.bar.shape, rc.bar.width, rc.bar.height = "rect", 160, h
+        rc.bar.fillDir, rc.bar.dx, rc.bar.dy = "right", 0, dy
+        if color then rc.color = color end
+    end
+    bar(u.rings.health, 18, 0)
+    bar(u.rings.power, 6, -14)
+    bar(u.rings.cast, 10, -25)
+    return u
+end
+
 local DB_VERSION = 2
 local DEFAULTS = {
-    player = UnitDefaults(-300, -150),
-    target = UnitDefaults( 300, -150),
+    player       = UnitDefaults(-300, -150),
+    target       = UnitDefaults( 300, -150),
+    focus        = SmallUnitDefaults(-500,  100),
+    targettarget = SmallUnitDefaults( 520,  -60),
+    pet          = SmallUnitDefaults(-500, -260),
 }
 DEFAULTS.player.rings.resource = ResourceDefaults()
 
-GU.UNITS = { "player", "target" }
+GU.UNITS = { "player", "target", "focus", "targettarget", "pet" }
+GU.SMALL = { focus = true, targettarget = true, pet = true }   -- cast BAR only, no auras
+GU.KICK_UNITS = { target = true, focus = true }                -- a cast colored by interrupt state
+GU.UNIT_LABEL = { player = "Player", target = "Target", focus = "Focus", targettarget = "Target of Target", pet = "Pet" }
 GU.RINGS = { "health", "power", "resource", "cast" }   -- draw order; a unit may lack some
 GU.MAX_SEGMENTS = 7
 
@@ -287,8 +312,11 @@ end
 
 -- Seed a unit's text list on first sight (and migrate the old single
 -- "center text"), then fill each piece's newer fields from TEXT_DEFAULTS.
-local function EnsureTexts(cfg)
-    if cfg.texts == nil then
+local function EnsureTexts(cfg, which)
+    if cfg.texts == nil and GU.SMALL[which] then
+        cfg.texts = { { template = "[name]", size = 11, justify = "LEFT", x = -76, y = 0, maxWidth = 110 },
+                      { template = "[hp:pct]", size = 11, justify = "RIGHT", x = 76, y = 0 } }
+    elseif cfg.texts == nil then
         local old = cfg.text
         cfg.texts = { { template = "[hp:pct]", size = old and old.size or 22,
                         enabled = not (old and old.enabled == false) } }
@@ -305,6 +333,7 @@ end
 
 -- Seed a unit's aura groups on first sight; fill newer fields from AURA_DEFAULTS.
 local function EnsureAuras(cfg, which)
+    if GU.SMALL[which] then cfg.auras = {} return end   -- the small units have no auras
     if cfg.auras == nil then
         cfg.auras = { { kind = (which == "target") and "mydebuffs" or "buffs", x = -110, y = 118 } }
     end
@@ -1011,6 +1040,19 @@ local function BarAnchorAdj(bc)
 end
 GU.BarAnchorAdj = BarAnchorAdj
 
+-- ★ The far end (the one the fill runs TOWARD) takes the Fill End's shape —
+-- track and absorb cut to it — UNLESS the bar's own ends are set and leave that
+-- side out: then the far end stays SQUARE (2026-10-04, the owner: an angled
+-- right end with a slanted fill running Right to Left, the left end square).
+-- No saved bar had a one-sided end with a Fill End before, so nothing moved.
+function GU.FarEndSquare(bc)
+    local re = bc.shape == "rect" and bc.roundEnds or nil
+    if not re or re == "both" then return false end
+    local d = bc.fillDir or "up"
+    local farIsStart = (d == "left" or d == "down")
+    return re ~= (farIsStart and "start" or "end")
+end
+
 local FILL = {   -- fillDir → orientation, reverse
     up    = { "VERTICAL",   false }, down  = { "VERTICAL",   true },
     right = { "HORIZONTAL", false }, left  = { "HORIZONTAL", true },
@@ -1059,13 +1101,27 @@ local function NewBar(holder, detached)
     -- the ramp: the grad bar only sizes its clip (a plain zero alpha)
     local gsb = bar.layers.grad
     gsb:GetStatusBarTexture():SetAlpha(0)
+    -- ★ The clip holds the ramp to the BOX; the fill's moving edge is cut by
+    -- `gradMask`, a MASK anchored to the grad bar's texture (ConfigureEdge).
+    -- The clip used to follow the texture itself, and a clip FRAME does not
+    -- track a moving texture: on the first cast after a /reload the fill drew
+    -- with no gradient at all, and later casts showed a strip of plain colour
+    -- trailing the edge (the owner, 2026-10-05). Regions anchored to the texture
+    -- (the Fill End pieces) never had either fault. `edge-mask.png` is a big
+    -- plain white so the CLAMPTOBLACK edge fades a negligible half-texel.
+    -- (no longer CLIPS: gradMask cuts the ramp to the fill's rectangle, which
+    -- lies inside the box. SUSPECTED 2026-10-05: a clipping frame drew nothing
+    -- on the first cast after a /reload — testing without it.)
     bar.gradClip = CreateFrame("Frame", nil, gsb)
-    bar.gradClip:SetClipsChildren(true)
-    bar.gradClip:SetPoint("TOPLEFT", gsb:GetStatusBarTexture(), "TOPLEFT")
-    bar.gradClip:SetPoint("BOTTOMRIGHT", gsb:GetStatusBarTexture(), "BOTTOMRIGHT")
+    bar.gradClip:SetAllPoints(fr)
     bar.gradTex = bar.gradClip:CreateTexture(nil, "ARTWORK")
     bar.gradTex:SetTexture(RAMP_PLAIN, "CLAMP", "CLAMP")
     bar.gradTex:SetPoint("CENTER", fr, "CENTER")
+    bar.gradMask = fr:CreateMaskTexture()
+    bar.gradMask:SetTexture(ART .. "fill\\edge-mask.png", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    bar.gradMask:SetPoint("TOPLEFT", gsb:GetStatusBarTexture(), "TOPLEFT")
+    bar.gradMask:SetPoint("BOTTOMRIGHT", gsb:GetStatusBarTexture(), "BOTTOMRIGHT")
+    bar.gradTex:AddMaskTexture(bar.gradMask)
     masked(bar.gradTex)
     -- GLOSS (2026-09-29, the owner's Figma mock): ONE white inner shadow — 65%,
     -- offset 0/4, blur 4 — rendered into art by tools/gen-gloss.py: a rim of
@@ -1238,21 +1294,37 @@ local function NewBar(holder, detached)
         -- angled fill over a round-ended track): the track's end takes the fill
         -- end's shape (ConfigureEdge), so the Rounded End on THAT side stands down.
         local fe = bc.fillEnd
-        if rect and nseg < 2 and not self.window and (fe == "round" or fe == "angled" or fe == "point") then
+        if rect and nseg < 2 and not self.window and (fe == "round" or fe == "angled" or fe == "point")
+            and not GU.FarEndSquare(bc) then
             local d = bc.fillDir or "up"
             if flat and d == "right" then wantE = false
             elseif flat and d == "left" then wantS = false
             elseif not flat and d == "up" then wantE = false
             elseif not flat and d == "down" then wantS = false end
         end
+        -- ★ THE ENDS' SHAPE (2026-10-04, the owner): `bc.endShape` round (nil) |
+        -- angled | point — the same art as the Fill End's, so a bar can keep an
+        -- angled end while its fill runs AWAY from it (Right to Left).
+        local es = bc.endShape
+        local function capFile(side)
+            -- ★ the CAP versions: the inner edge solid to the very corner. A cap
+            -- mask is CLAMPed along the whole bar, so the Fill End art's
+            -- half-transparent corner pixel became a half-strength bottom ROW on
+            -- the track and fill — a step under the slanted fill (measured from
+            -- the owner's screenshots, 2026-10-05). tools/gen-fill-art.py.
+            if es == "angled" or es == "point" then return "fill\\cap-" .. es .. "-" .. side .. ".png" end
+            return "cap-" .. side .. ".png"
+        end
         for _, e in ipairs(self.masks) do
-            cap(e.capS, wantS, flat and "cap-l.png" or "cap-b.png", flat and "LEFT" or "BOTTOM")
-            cap(e.capE, wantE, flat and "cap-r.png" or "cap-t.png", flat and "RIGHT" or "TOP")
+            -- ★ REMOVE before ADD: a texture takes at most three masks and a
+            -- fourth is a hard error. The fill's gradient carries `gradMask` too
+            -- (2026-10-05), so shape mask + both caps + it would be four.
+            if rect and e.on then e.tex:RemoveMaskTexture(e.mask); e.on = false end
+            cap(e.capS, wantS, capFile(flat and "l" or "b"), flat and "LEFT" or "BOTTOM")
+            cap(e.capE, wantE, capFile(flat and "r" or "t"), flat and "RIGHT" or "TOP")
             if wantS ~= (e.onS or false) then if wantS then e.tex:AddMaskTexture(e.capS) else e.tex:RemoveMaskTexture(e.capS) end; e.onS = wantS end
             if wantE ~= (e.onE or false) then if wantE then e.tex:AddMaskTexture(e.capE) else e.tex:RemoveMaskTexture(e.capE) end; e.onE = wantE end
-            if rect then
-                if e.on then e.tex:RemoveMaskTexture(e.mask); e.on = false end
-            else
+            if not rect then
                 if not e.on then e.tex:AddMaskTexture(e.mask); e.on = true end
                 local m = e.mask
                 m:SetSize(cw, ch)
@@ -1270,7 +1342,10 @@ local function NewBar(holder, detached)
         self:AimGradient()
         self.absorb:SetOrientation(dir[1]); self.absorb:SetReverseFill(not dir[2]); self.absorb:SetFrameLevel(lv + self.absorb.levelUp)
         self.glossOn = bc.gloss == true
-        self:PlaceGloss(bc, rect, flat, short, wantS, wantE, fw, fh)
+        -- the gloss curves round a ROUND end only; past an angled / pointed one
+        -- the straight band runs on and the end's mask cuts it (as on a Fill End)
+        local roundCaps = (es ~= "angled" and es ~= "point")
+        self:PlaceGloss(bc, rect, flat, short, wantS and roundCaps, wantE and roundCaps, fw, fh)
         self.absorbOn = self.hasAbsorb and bc.absorb ~= false or false   -- the health bar only
         local ac = bc.absorbColor or { 1, 1, 1 }
         self.hatch:SetVertexColor(ac[1], ac[2], ac[3])
@@ -1346,6 +1421,21 @@ local function NewBar(holder, detached)
         elseif name and name ~= "" then t:SetTexture(name)
         else t:SetColorTexture(1, 1, 1, 1) end
     end
+    -- ★ A FILL TEXTURE (2026-10-05, the owner: "textures to bars … bar-rectangle
+    -- type only"; the TRACK stays plain). `bc.fillTexture` = a shared bar
+    -- texture's name (LibSharedMedia "statusbar"), drawn by the colour layers in
+    -- place of plain white — the colours tint it. The StatusBar crops it, so it
+    -- stays put on screen as the value moves.
+    local WHITE = "Interface\\Buttons\\WHITE8x8"
+    local function FillTexPath(bc)
+        local name = bc and bc.fillTexture
+        if not name or name == "" then return nil end
+        local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+        local path = LSM and LSM:Fetch("statusbar", name, true)
+        if not path and GloomsHub and GloomsHub.ResolveAssetPath then path = GloomsHub:ResolveAssetPath(name) end
+        return path
+    end
+    GU.FillTexPath = FillTexPath
     function bar:ConfigureEdge(bc, rect, bw, bh, lv)
         local fr = self.frame
         local dir = bc.fillDir or "up"
@@ -1359,10 +1449,21 @@ local function NewBar(holder, detached)
         if ends ~= "round" and ends ~= "angled" and ends ~= "point" then ends = nil end
         self.capOn = ends ~= nil
         local capLen = ends and math.max(1, math.floor(A / 2 + 0.5)) or 0
+        -- ★ A SQUARE far end (GU.FarEndSquare): the layers keep the WHOLE box and
+        -- the end piece runs off the end, clipped by endGate — so the fill
+        -- finishes square instead of leaving a corner of track beside the slant
+        -- (the owner, 2026-10-05). The tip reaches the end capLen early.
+        local farSquare = ends ~= nil and GU.FarEndSquare(bc)
+        self.endGate:SetClipsChildren(farSquare)
+        local ftex = rect and FillTexPath(bc) or nil
+        for _, name in ipairs({ "base", "mid", "low" }) do
+            local sb = self.layers[name]
+            if sb then sb:GetStatusBarTexture():SetTexture(ftex or WHITE, "CLAMP", "CLAMP") end
+        end
         -- the colour layers make room for the end (the absorb keeps the whole box)
         for _, sb in pairs(self.layers) do
             sb:ClearAllPoints()
-            if capLen == 0 then sb:SetAllPoints(fr)
+            if capLen == 0 or farSquare then sb:SetAllPoints(fr)
             elseif dir == "right" then sb:SetPoint("TOPLEFT", fr, "TOPLEFT"); sb:SetPoint("BOTTOMRIGHT", fr, "BOTTOMRIGHT", -capLen, 0)
             elseif dir == "left" then sb:SetPoint("TOPLEFT", fr, "TOPLEFT", capLen, 0); sb:SetPoint("BOTTOMRIGHT", fr, "BOTTOMRIGHT")
             elseif dir == "up" then sb:SetPoint("TOPLEFT", fr, "TOPLEFT", 0, -capLen); sb:SetPoint("BOTTOMRIGHT", fr, "BOTTOMRIGHT")
@@ -1377,6 +1478,18 @@ local function NewBar(holder, detached)
         local ox = (dir == "right" and -px) or (dir == "left" and px) or 0
         local oy = (dir == "up" and -px) or (dir == "down" and px) or 0
         local function endSize(t) if vertical then t:SetSize(A, capLen + px) else t:SetSize(capLen + px, A) end end
+        local edgeTex = self.layers.base:GetStatusBarTexture()
+        -- ★ `edgeTex` is declared ABOVE this helper on purpose: declared below,
+        -- the helper read a nil GLOBAL, anchored every piece to the screen and
+        -- every bar lost its Fill End (2026-10-05).
+        local function pinEnd(t)
+            -- by the fill's BOTTOM corner (left corner, standing): centred, the
+            -- piece landed one pixel row lower than the fill on the owner's 4K —
+            -- a row poking out below, a missing row on top (2026-10-05, measured
+            -- from his screenshot: bar rows 35-70, piece row 71)
+            if vertical then t:SetPoint(E[2] .. "LEFT", edgeTex, E[1] .. "LEFT", ox, oy)
+            else t:SetPoint("BOTTOM" .. E[2], edgeTex, "BOTTOM" .. E[1], ox, oy) end
+        end
         -- ★ …but only the SOLID pieces may overlap. The gloss and the gradient
         -- are see-through, so the overlap drew them twice: a one-pixel BRIGHT
         -- line where the fill meets its end (the owner's screenshot, 2026-10-02 —
@@ -1386,41 +1499,74 @@ local function NewBar(holder, detached)
         do
             local sx, sy = ends and ox or 0, ends and oy or 0
             local early = (dir == "left" or dir == "up")
-            for _, pair in ipairs({ { self.gradClip, self.layers.grad }, { self.glossClip, self.layers.gloss } }) do
+            for _, pair in ipairs({ { self.gradMask, self.layers.grad }, { self.glossClip, self.layers.gloss } }) do
                 local clip, tex = pair[1], pair[2]:GetStatusBarTexture()
                 clip:ClearAllPoints()
                 clip:SetPoint("TOPLEFT", tex, "TOPLEFT", early and sx or 0, early and sy or 0)
                 clip:SetPoint("BOTTOMRIGHT", tex, "BOTTOMRIGHT", early and 0 or sx, early and 0 or sy)
             end
         end
-        local edgeTex = self.layers.base:GetStatusBarTexture()
         -- THE FILL END
         self.endGate:SetFrameLevel(lv + #LAYERS + 1)
         if ends then
-            local file = (ends == "round") and (ART .. "cap-" .. E[3] .. ".png") or (FILLART .. "end-" .. ends .. "-" .. E[3] .. ".png")
+            -- an angled fill running away from an ANGLED bar end leans the same
+            -- way as that end (turned, not mirrored): the slants are parallel
+            -- (the owner, 2026-10-04 — the mirror read as the wrong angle)
+            local kind = ends
+            if ends == "angled" and bc.endShape == "angled" and bc.roundEnds then kind = "angledpar" end
+            local file = (ends == "round") and (ART .. "cap-" .. E[3] .. ".png") or (FILLART .. "end-" .. kind .. "-" .. E[3] .. ".png")
             local am = self.absorbEndMask
             am:ClearAllPoints()
             if vertical then am:SetSize(A, capLen) else am:SetSize(capLen, A) end
             am:SetPoint(E[1], fr, E[1])
             am:SetTexture(file, "CLAMP", "CLAMP")
-            if not self.absorbEndOn then self.hatch:AddMaskTexture(am); self.absorbEndOn = true end
+            if farSquare then
+                if self.absorbEndOn then self.hatch:RemoveMaskTexture(am); self.absorbEndOn = false end
+            elseif not self.absorbEndOn then self.hatch:AddMaskTexture(am); self.absorbEndOn = true end
             local tm = self.trackEndMask
             tm:ClearAllPoints()
             if vertical then tm:SetSize(A, capLen) else tm:SetSize(capLen, A) end
             tm:SetPoint(E[1], fr, E[1])
             tm:SetTexture(file, "CLAMP", "CLAMP")
-            if not self.trackEndOn then self.track:AddMaskTexture(tm); self.trackEndOn = true end
+            if farSquare then
+                if self.trackEndOn then self.track:RemoveMaskTexture(tm); self.trackEndOn = false end
+            elseif not self.trackEndOn then self.track:AddMaskTexture(tm); self.trackEndOn = true end
+            -- With a FILL TEXTURE the end can't be the end art tinted: it is the
+            -- bar's texture laid STILL over the fill's own rectangle — carried on
+            -- capLen past it, the texture's coordinates stretched to match, so it
+            -- lines up with the cropped fill exactly — and cut to the end's shape
+            -- by endMask, which rides the edge (the gradient's own trick: the
+            -- edge is a SECRET position, so nothing can be placed BY it in Lua).
+            local Lw = (farSquare and L or (L - capLen))
+            local over = (Lw + capLen) / math.max(1, Lw)
             for _, name in ipairs({ "base", "mid", "low" }) do
                 local t = self.endTex[name]
                 t:ClearAllPoints()
-                endSize(t)
-                t:SetPoint(E[2], edgeTex, E[1], ox, oy)
-                t:SetTexture(file, "CLAMP", "CLAMP")
+                if ftex then
+                    local sb = self.layers.base
+                    if dir == "right" then
+                        t:SetPoint("TOPLEFT", sb, "TOPLEFT"); t:SetSize(Lw + capLen, A); t:SetTexCoord(0, over, 0, 1)
+                    elseif dir == "left" then
+                        t:SetPoint("TOPRIGHT", sb, "TOPRIGHT"); t:SetSize(Lw + capLen, A); t:SetTexCoord(1 - over, 1, 0, 1)
+                    elseif dir == "up" then
+                        t:SetPoint("BOTTOMLEFT", sb, "BOTTOMLEFT"); t:SetSize(A, Lw + capLen); t:SetTexCoord(0, 1, 1 - over, 1)
+                    else
+                        t:SetPoint("TOPLEFT", sb, "TOPLEFT"); t:SetSize(A, Lw + capLen); t:SetTexCoord(0, 1, 0, over)
+                    end
+                    t:SetTexture(ftex, "CLAMP", "CLAMP")
+                    if not t.gbEndMasked then t:AddMaskTexture(self.endMask); t.gbEndMasked = true end
+                else
+                    if t.gbEndMasked then t:RemoveMaskTexture(self.endMask); t.gbEndMasked = nil end
+                    t:SetTexCoord(0, 1, 0, 1)
+                    endSize(t)
+                    pinEnd(t)
+                    t:SetTexture(file, "CLAMP", "CLAMP")
+                end
             end
             local m = self.endMask
             m:ClearAllPoints()
             endSize(m)
-            m:SetPoint(E[2], edgeTex, E[1], ox, oy)
+            pinEnd(m)
             m:SetTexture(file, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
             -- the gloss's curve round a ROUND end (lit from above: a flat bar's
             -- right or left end, a standing bar's top)
@@ -1436,7 +1582,7 @@ local function NewBar(holder, detached)
             if gfile then
                 g:SetTexture(gfile)
                 endSize(g)
-                g:SetPoint(E[2], edgeTex, E[1], ox, oy)
+                pinEnd(g)
             end
             -- an angled or pointed end on a flat bar: the straight rim runs on over it
             local band = self.endTex.band
@@ -2016,6 +2162,30 @@ end
 -- and its show / hide is a STATE DRIVER — the game shows it under the same
 -- conditions as the frame (Show When; the target's only while one exists),
 -- in combat too. Off while the tab is moving the unit, so the drag reaches it.
+-- HIDE WHEN MOUNTED (the owner, 2026-10-04): cfg.hideMounted. "Mounted" = a
+-- real mount OR a druid's travel-type form (the owner: those count) — the same
+-- rule as Gloom's Bars. The frame is plain, so UpdateVisibility just reads it;
+-- the secure click layer needs it as a macro condition, where a form has only
+-- its INDEX ([form:N]), found from the spell IDs.
+local TRAVEL_FORMS = { [783] = true, [165962] = true, [210053] = true, [33943] = true, [40120] = true }
+local function MountedCond()
+    local s = "[mounted]"
+    for i = 1, (GetNumShapeshiftForms and GetNumShapeshiftForms()) or 0 do
+        local spellID = select(4, GetShapeshiftFormInfo(i))
+        if spellID and TRAVEL_FORMS[spellID] then s = s .. "[form:" .. i .. "]" end
+    end
+    return s
+end
+local function IsMountedNow()
+    if IsMounted and IsMounted() then return true end
+    local i = GetShapeshiftForm and GetShapeshiftForm() or 0
+    if i > 0 then
+        local spellID = select(4, GetShapeshiftFormInfo(i))
+        if spellID and TRAVEL_FORMS[spellID] then return true end
+    end
+    return false
+end
+
 local CLICK_SHOW = {
     always = "show", combat = "[combat] show; hide", target = "[@target,exists] show; hide",
     combat_or_target = "[combat] show; [@target,exists] show; hide", never = "hide",
@@ -2031,16 +2201,28 @@ local function ApplyClicker(which, bb)
         b:SetAttribute("*type1", "target")
         b:SetAttribute("*type2", "togglemenu")
         b:RegisterForClicks("AnyUp")
+        -- the unit's TOOLTIP on hover, like every other unit frame (the owner,
+        -- 2026-10-05): Blizzard's own anchor and SetUnit, so it follows the
+        -- user's tooltip settings and any tooltip addon
+        b:SetScript("OnEnter", function(self)
+            local unit = self:GetAttribute("unit")
+            if not (unit and UnitExists(unit)) then return end
+            GameTooltip_SetDefaultAnchor(GameTooltip, self)
+            GameTooltip:SetUnit(unit)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
         clickers[which] = b
     end
     b:SetFrameStrata(cfg.strata or "MEDIUM")
     b:SetFrameLevel(cfg.level or 10)
     b:ClearAllPoints()
     b:SetSize(math.max(20, bb[2] - bb[1]), math.max(20, bb[4] - bb[3]))
-    b:SetPoint("CENTER", UIParent, "CENTER", cfg.x + f.bbX, cfg.y + f.bbY)
+    b:SetPoint("CENTER", UIParent, "CENTER", cfg.x + (bb[1] + bb[2]) / 2, cfg.y + (bb[3] + bb[4]) / 2)
     b:EnableMouse(editing ~= which)
     local cond = CLICK_SHOW[cfg.showCondition or "always"] or "show"
-    if which == "target" and cond ~= "hide" then cond = "[@target,noexists] hide; " .. cond end
+    if which ~= "player" and cond ~= "hide" then cond = "[@" .. which .. ",noexists] hide; " .. cond end
+    if cfg.hideMounted and cond ~= "hide" then cond = MountedCond() .. " hide; " .. cond end
     if b.gbCond ~= cond then
         RegisterStateDriver(b, "visibility", cond)
         b.gbCond = cond
@@ -2059,6 +2241,7 @@ function GU:ApplyLayout(which)
     f:SetFrameLevel(cfg.level or 10)
 
     local bb   -- the rings' union box, relative to the unit's centre (the anchor + green outline)
+    local cbb  -- health + power only: the click layer's box
 
     for i, key in ipairs(GU.RINGS) do
         local rc, r = cfg.rings[key], f.rings[key]
@@ -2186,6 +2369,13 @@ function GU:ApplyLayout(which)
                 local l, rr, b, t = px - w / 2, px + w / 2, py - h / 2, py + h / 2
                 if bb then bb[1] = math.min(bb[1], l); bb[2] = math.max(bb[2], rr); bb[3] = math.min(bb[3], b); bb[4] = math.max(bb[4], t)
                 else bb = { l, rr, b, t } end
+                -- the CLICK box: health and power only (the owner, 2026-10-05 —
+                -- a class resource moved to mid-screen made everything between
+                -- it and the health bar answer as the player: tooltip and clicks)
+                if key == "health" or key == "power" then
+                    if cbb then cbb[1] = math.min(cbb[1], l); cbb[2] = math.max(cbb[2], rr); cbb[3] = math.min(cbb[3], b); cbb[4] = math.max(cbb[4], t)
+                    else cbb = { l, rr, b, t } end
+                end
             end
         end
     end
@@ -2198,9 +2388,10 @@ function GU:ApplyLayout(which)
     g:ClearAllPoints(); g:SetSize(math.max(20, bb[2] - bb[1]), math.max(20, bb[4] - bb[3]))
     g:SetPoint("CENTER", UIParent, "CENTER", cfg.x + f.bbX, cfg.y + f.bbY)
     f.bb = bb
-    ApplyClicker(which, bb)
+    f.cbb = cbb or bb
+    ApplyClicker(which, f.cbb)
 
-    EnsureTexts(cfg)
+    EnsureTexts(cfg, which)
     self:LayoutTexts(f, cfg)
     EnsureAuras(cfg, which)
     -- Fenced: an aura-engine failure must never cost the rings or the other unit.
@@ -2683,7 +2874,7 @@ local function CastTick(holder)
     if not st then return end
     GU:RefreshTexts(frames[which], which, "cast")
     -- Colour first, geometry second: the alpha gate must be the last writer.
-    local kickAware = which == "target" and rc.kickAware and not st.fake
+    local kickAware = GU.KICK_UNITS[which] and rc.kickAware and not st.fake
     if kickAware then r.fill:SetColor("base", KickColor(rc, st.locked)) end
     local p
     if st.plain then
@@ -2707,8 +2898,14 @@ function GU:RefreshCast(which)
     local st = rc.enabled and UnitExists(which) and CastState(which) or nil
     local route = (not rc.enabled) and "ring switched off" or (not st) and "no cast" or nil   -- for the trace
     if not st and rc.enabled and castPreview[which] then
-        local now = GetTime() * 1000
-        st = { name = "preview", startMS = now, endMS = now + 5000, channel = false, locked = false, fake = true }
+        -- an already-running preview carries on: the target of target is
+        -- re-read five times a second, and a fresh one each time restarted the
+        -- 5 s fill every 0.2 s (the owner, 2026-10-05)
+        if r.cast and r.cast.fake then st = r.cast
+        else
+            local now = GetTime() * 1000
+            st = { name = "preview", startMS = now, endMS = now + 5000, channel = false, locked = false, fake = true }
+        end
     end
     r.cast = nil
     if st then
@@ -2741,7 +2938,7 @@ function GU:RefreshCast(which)
     -- colour: a target's cast by interrupt state (re-evaluated per tick, the
     -- kick's cooldown moves); otherwise the ring's own colouring
     if st then
-        if which == "target" and rc.kickAware and not st.fake then
+        if GU.KICK_UNITS[which] and rc.kickAware and not st.fake then
             r.fill:SetSolid(rc.color)
             r.fill:SetColor("base", KickColor(rc, st.locked))
         elseif rc.colorMode == "gradient" then r.fill:SetGradient(rc.color, rc.color2, rc.gradientAngle)
@@ -2750,7 +2947,7 @@ function GU:RefreshCast(which)
     r.holder:SetShown(r.casting and f:IsShown())
     r.holder.unit, r.holder.ring, r.holder.cfg = which, r, rc
     r.holder:SetScript("OnUpdate", r.casting and CastTick or nil)
-    if not (r.casting and which == "target" and rc.kickAware and not st.fake) then HideKickExtras(r) end
+    if not (r.casting and GU.KICK_UNITS[which] and rc.kickAware and not st.fake) then HideKickExtras(r) end
     if r.casting then CastTick(r.holder) else r.fill:SetFromPlain(0); GU:RefreshTexts(f, which, "cast") end
 end
 
@@ -2770,7 +2967,9 @@ UpdateVisibility = function()
         elseif cond == "combat_or_target" then show = inCombat or hasTarget
         elseif cond == "never" then show = false   -- hidden, full stop — even while the tab is editing it (the owner, 2026-09-21)
         else show = true end
-        if which == "target" and not hasTarget and editing ~= "target" then show = false end
+        -- every unit but the player needs to EXIST (shown empty while its tab edits it)
+        if which ~= "player" and editing ~= which and not UnitExists(which) then show = false end
+        if show and cfg.hideMounted and IsMountedNow() then show = false end
         f:SetShown(show)
         if show then GU:Refresh(which) end
         if f.rings.cast then f.rings.cast.holder:SetShown(show and f.rings.cast.casting or false) end
@@ -2812,12 +3011,16 @@ end
 function GU:CopyFrom(which, from)
     local dst, src = db[which], db[from]
     if not (dst and src) or which == from then return end
+    -- auras stay put when either side is a small unit (they have none, and
+    -- copying their empty list would wipe the other's groups)
+    local keepAuras = GU.SMALL[which] or GU.SMALL[from]
     for k, v in pairs(src) do
-        if k ~= "x" and k ~= "y" and k ~= "rings" then dst[k] = DeepCopy(v) end
+        if k ~= "x" and k ~= "y" and k ~= "rings" and not (k == "auras" and keepAuras) then dst[k] = DeepCopy(v) end
     end
     for key, rc in pairs(src.rings) do
         if dst.rings[key] then dst.rings[key] = DeepCopy(rc) end
     end
+    if GU.SMALL[which] and dst.rings.cast then dst.rings.cast.mode = "bar" end   -- a small unit's cast is a bar
     self:ApplyLayout(which)
 end
 
@@ -2878,7 +3081,9 @@ local function PrepareProfile(prof)
                 end
             end
         end
-        EnsureTexts(prof[which]); EnsureAuras(prof[which], which)
+        -- a small unit's cast is a BAR, never a ring (the owner, 2026-10-05)
+        if GU.SMALL[which] and prof[which].rings.cast then prof[which].rings.cast.mode = "bar" end
+        EnsureTexts(prof[which], which); EnsureAuras(prof[which], which)
     end
     return prof
 end
@@ -2916,6 +3121,9 @@ function GU:ActiveProfileTable() return db end
 if GloomsHub and GloomsHub.RegisterAnchor then
     GloomsHub:RegisterAnchor("uf:player", { label = "Player Frame", frame = function() return GU:Frame("player") end })
     GloomsHub:RegisterAnchor("uf:target", { label = "Target Frame", frame = function() return GU:Frame("target") end })
+    GloomsHub:RegisterAnchor("uf:focus", { label = "Focus Frame", frame = function() return GU:Frame("focus") end })
+    GloomsHub:RegisterAnchor("uf:targettarget", { label = "Target of Target Frame", frame = function() return GU:Frame("targettarget") end })
+    GloomsHub:RegisterAnchor("uf:pet", { label = "Pet Frame", frame = function() return GU:Frame("pet") end })
 end
 function GU:ReapplyAll()
     if not initialised then return end
@@ -3135,6 +3343,8 @@ for _, e in ipairs({ "PLAYER_FLAGS_CHANGED", "PLAYER_UPDATE_RESTING", "RAID_TARG
 end
 ev:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 ev:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+ev:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")    -- a form learned / lost moves the travel form's [form:N] (Hide When Mounted)
+ev:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED") -- mounting / dismounting (Hide When Mounted)
 ev:RegisterEvent("SPELLS_CHANGED")
 ev:RegisterEvent("UNIT_PET")
 for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_DELAYED",
@@ -3143,7 +3353,29 @@ for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLC
                      "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" }) do
     ev:RegisterUnitEvent(e, "player", "target")
 end
-ev:SetScript("OnEvent", function(_, event, unit)
+-- ★ THE SMALL UNITS' events. RegisterUnitEvent takes at most TWO units, so
+-- focus and pet get a second frame with the same handler. The target of
+-- target fires NO unit events at all — it is re-read on a ticker (below) and
+-- on UNIT_TARGET of the target (a new ToT).
+local ev2 = CreateFrame("Frame")
+for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
+                     "UNIT_FACTION", "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_CLASSIFICATION_CHANGED",
+                     "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_PREDICTION", "UNIT_FLAGS", "UNIT_CONNECTION",
+                     "UNIT_THREAT_SITUATION_UPDATE",
+                     "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_DELAYED",
+                     "UNIT_SPELLCAST_CHANNEL_START", "UNIT_SPELLCAST_CHANNEL_STOP", "UNIT_SPELLCAST_CHANNEL_UPDATE",
+                     "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTIBLE",
+                     "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" }) do
+    ev2:RegisterUnitEvent(e, "focus", "pet")
+end
+ev:RegisterEvent("PLAYER_FOCUS_CHANGED")
+ev:RegisterUnitEvent("UNIT_TARGET", "target")
+C_Timer.NewTicker(0.2, function()
+    local f = initialised and frames.targettarget
+    if f and f:IsShown() then GU:Refresh("targettarget") end
+end)
+
+local function OnEvent(_, event, unit)
     if event == "PLAYER_LOGIN" then
         GloomsUnitFramesDB = GloomsUnitFramesDB or {}
         root = GloomsUnitFramesDB
@@ -3175,6 +3407,11 @@ ev:SetScript("OnEvent", function(_, event, unit)
         for _, which in ipairs(GU.UNITS) do GU:ApplyLayout(which) end
         -- the frames other tools attach to now exist (the Hub's Anchors.lua)
         if GloomsHub.AnchorsChanged then GloomsHub:AnchorsChanged() end
+    elseif event == "PLAYER_MOUNT_DISPLAY_CHANGED" or event == "PLAYER_FOCUS_CHANGED" or event == "UNIT_TARGET" then
+        UpdateVisibility()
+    elseif event == "UPDATE_SHAPESHIFT_FORMS" then
+        if InCombatLockdown() then clickPending = true
+        else for _, u in ipairs(GU.UNITS) do if frames[u] and frames[u].bb then ApplyClicker(u, frames[u].cbb or frames[u].bb) end end end
     elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_TARGET_CHANGED"
         or event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
         UpdateVisibility()
@@ -3182,10 +3419,11 @@ ev:SetScript("OnEvent", function(_, event, unit)
         if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ENTERING_WORLD" then GU:ApplyBlizzardCastBar() end
         if event == "PLAYER_REGEN_ENABLED" and clickPending then
             clickPending = false
-            for _, u in ipairs(GU.UNITS) do if frames[u] and frames[u].bb then ApplyClicker(u, frames[u].bb) end end
+            for _, u in ipairs(GU.UNITS) do if frames[u] and frames[u].bb then ApplyClicker(u, frames[u].cbb or frames[u].bb) end end
         end
     elseif event == "SPELLS_CHANGED" or (event == "UNIT_PET" and unit == "player") then
         RefreshKick()
+        if event == "UNIT_PET" and initialised then UpdateVisibility() end   -- a pet came or went
     elseif event == "RUNE_POWER_UPDATE" then
         if initialised and frames.player:IsShown() then GU:Refresh("player") end
     elseif event == "UNIT_POWER_POINT_CHARGE" then
@@ -3194,7 +3432,7 @@ ev:SetScript("OnEvent", function(_, event, unit)
         or event == "UPDATE_SHAPESHIFT_FORM" then
         RefreshKick()
         GU:ApplyLayout("player")   -- the segment count may have changed
-    elseif event:find("^UNIT_SPELLCAST") and (unit == "player" or unit == "target") then
+    elseif event:find("^UNIT_SPELLCAST") and unit and frames[unit] then
         GU:RefreshCast(unit)
     elseif event == "PLAYER_FLAGS_CHANGED" or event == "PLAYER_UPDATE_RESTING" or event == "RAID_TARGET_UPDATE"
         or event == "PARTY_LEADER_CHANGED" or event == "GROUP_ROSTER_UPDATE" or event == "UNIT_THREAT_LIST_UPDATE"
@@ -3204,10 +3442,12 @@ ev:SetScript("OnEvent", function(_, event, unit)
                 if frames[which]:IsShown() then GU:RefreshTexts(frames[which], which) end
             end
         end
-    elseif unit == "player" or unit == "target" then
+    elseif unit and frames[unit] then
         GU:Refresh(unit)
     end
-end)
+end
+ev:SetScript("OnEvent", OnEvent)
+ev2:SetScript("OnEvent", OnEvent)
 
 ------------------------------------------------------------------------
 -- Slash
@@ -3354,6 +3594,40 @@ SlashCmdList["GLOOMSUNITFRAMES"] = function(msg)
     if msg == "casttrace" then
         GU.castTrace = not GU.castTrace
         Chat("cast trace " .. (GU.castTrace and "ON — the target's cast route prints here as it changes" or "off"))
+        return
+    end
+    if msg == "endprobe" then
+        -- DIAGNOSTIC (2026-10-05, the slanted Fill End not drawing on the cast
+        -- bar): the player's cast-bar end piece, now and once a second for 8 s.
+        local function sv(v) if issecretvalue and issecretvalue(v) then return "SECRET" end; return tostring(v) end
+        local n = 0
+        local function dump()
+            n = n + 1
+            local f = frames.player; local r = f and f.rings and f.rings.cast; local b = r and r.fill
+            if not (b and b.endTex) then Chat("endprobe: the cast ring is not a bar"); return end
+            local t, g = b.endTex.base, b.endGate
+            local p1, rel, p2, x, y = t:GetPoint(1)
+            Chat(("endprobe %d: casting=%s capOn=%s gate shown=%s vis=%s alpha=%s lvl=%d clips=%s | piece shown=%s tex=%s w=%s h=%s alpha=%s pt=%s>%s rel=%s | fill shown=%s w=%s"):format(
+                n, sv(r.casting), sv(b.capOn), sv(g:IsShown()), sv(g:IsVisible()), sv(g:GetAlpha()), g:GetFrameLevel(), sv(g:DoesClipChildren()),
+                sv(t:IsShown()), sv(t:GetTexture()), sv(t:GetWidth()), sv(t:GetHeight()), sv(t:GetAlpha()),
+                sv(p1), sv(p2), (rel == b.layers.base:GetStatusBarTexture()) and "fill" or sv(rel and rel.GetName and rel:GetName() or rel),
+                sv(b.layers.base:IsShown()), sv(b.layers.base:GetStatusBarTexture():GetWidth())))
+            local function vc(tx) local r1, g1, b1, a1 = tx:GetVertexColor(); return ("%s/%s/%s/%s"):format(sv(r1), sv(g1), sv(b1), sv(a1)) end
+            local lt = b.layers.base:GetStatusBarTexture()
+            local _, sub = t:GetDrawLayer()
+            Chat(("   colors: piece base=%s mid=%s low=%s | fill base=%s | piece layer=%s/%s vis=%s | track lvl=%s gate lvl=%d"):format(
+                vc(b.endTex.base), vc(b.endTex.mid), vc(b.endTex.low), vc(lt), sv(t:GetDrawLayer()), sv(sub), sv(t:IsVisible()),
+                sv(b.track and b.track.GetParent and b.track:GetParent():GetFrameLevel()), g:GetFrameLevel()))
+            Chat(("   where: piece L=%s R=%s T=%s B=%s | fill L=%s R=%s T=%s B=%s | box L=%s R=%s"):format(
+                sv(t:GetLeft()), sv(t:GetRight()), sv(t:GetTop()), sv(t:GetBottom()),
+                sv(lt:GetLeft()), sv(lt:GetRight()), sv(lt:GetTop()), sv(lt:GetBottom()), sv(b.frame:GetLeft()), sv(b.frame:GetRight())))
+            local gt, gc, em = b.layers.grad:GetStatusBarTexture(), b.gradMask, b.endMask
+            Chat(("   grad: fillBase L=%s | gradBar L=%s | gradMask L=%s | endMask L=%s R=%s | basePiece L=%s R=%s | gradBar shown=%s"):format(
+                sv(lt:GetLeft()), sv(gt:GetLeft()), sv(gc:GetLeft()), sv(em:GetLeft()), sv(em:GetRight()),
+                sv(t:GetLeft()), sv(t:GetRight()), sv(b.layers.grad:IsShown())))
+            if n < 3 then C_Timer.After(1, dump) end
+        end
+        dump()
         return
     end
     if msg == "probe" then ProbeAbsorb() return end
