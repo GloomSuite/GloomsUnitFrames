@@ -23,7 +23,7 @@
 
 Bespoke WoW addon: **circular unit frames** for the player and the target — health, power,
 class-resource and cast displays as ARCS of any span, each placeable, sizeable, layerable and
-colourable. Target: **Midnight 12.1** (Interface `120100`), retail only. Built 2026-09-19 in one
+colourable. Target: **Midnight 12.1** (Interface `120100, 120105`), retail only. Built 2026-09-19 in one
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
 The remaining work is Hub BACKLOG item 12 (watching) and the suite-wide UI REDESIGN (item 16,
