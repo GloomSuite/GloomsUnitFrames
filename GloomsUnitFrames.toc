@@ -1,4 +1,4 @@
-## Interface: 120100, 120105
+## Interface: 120100, 120105, 16001
 ## Title: Gloom's Unit Frames
 ## Notes: Circular health, power and cast displays for the player and the target — arcs of any span, placeable, layerable, driven safely from 12.1's secret values. Part of the Gloom Suite.
 ## IconTexture: Interface\AddOns\GloomsUnitFrames\Media\ui\logo.png

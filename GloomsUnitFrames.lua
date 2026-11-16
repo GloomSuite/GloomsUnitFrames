@@ -3033,9 +3033,18 @@ end
 ------------------------------------------------------------------------
 -- Profiles (the data model is described above DEFAULTS).
 ------------------------------------------------------------------------
+-- The name comes from the Hub: in WoW Forever UnitName is the FIRST name only,
+-- shared by alts, so the Hub appends the character's own ID there (retail: UnitName).
 function GU:CharKey()
-    local name, realm = UnitName("player"), GetRealmName()
+    local name, realm = (GloomsHub and GloomsHub.CharacterKeyName and GloomsHub.CharacterKeyName()) or UnitName("player"), GetRealmName()
     return (name or "?") .. "-" .. (realm or "?")
+end
+-- A binding saved under the pre-2026-11-16 key (first name only, Forever):
+-- adopt it once, for the first character to log in, then drop the old key.
+local function AdoptLegacyBinding()
+    local old = ((GloomsHub and GloomsHub.LegacyCharacterKeyName and GloomsHub.LegacyCharacterKeyName()) or "?") .. "-" .. (GetRealmName() or "?")
+    local key, cp = GU:CharKey(), root and root.charProfiles
+    if cp and old ~= key and cp[key] == nil and cp[old] ~= nil then cp[key] = cp[old]; cp[old] = nil end
 end
 
 local function SortedNames(t)
@@ -3398,6 +3407,7 @@ local function OnEvent(_, event, unit)
         root.charProfiles = root.charProfiles or {}
         if next(root.profiles) == nil then root.profiles.Default = {} end
         -- Bind this character (CharKey needs the realm, hence LOGIN) and load.
+        AdoptLegacyBinding()
         local name = GU:ActiveProfileName()
         root.charProfiles[GU:CharKey()] = name
         LoadProfile(name)
