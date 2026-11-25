@@ -23,11 +23,17 @@
 
 Bespoke WoW addon: **circular unit frames** for the player and the target — health, power,
 class-resource and cast displays as ARCS of any span, each placeable, sizeable, layerable and
-colourable. Target: **Midnight 12.1** (Interface `120100, 120105`), retail only. Built 2026-09-19 in one
+colourable. Target: **Midnight 12.1** (Interface `120100, 120105`), retail. (The TOC also carries `16001`, WoW Forever — supported 2026-11, dropped by the owner 2026-11-25; the Hub's ARCHIVE has the record.) Built 2026-09-19 in one
 session, owner-QA'd throughout. Its purpose is to **replace EllesmereUI's player and target frames
 outright**; EUI keeps target-of-target, focus, pet and boss frames via its per-unit *hidden* source.
 The remaining work is Hub BACKLOG item 12 (watching) and the suite-wide UI REDESIGN (item 16,
 which replaces this tab's look — done 2026-09-27, the two-window windows); 13 closed as superseded, 14 and 15 closed 2026-09-20.
+
+## ▶▶▶ 2026-11-16 → 20 — character keys (the Hub's, CONTRACTS §9)
+`GU:CharKey` = Hub `CharacterKeyName .. "-" .. CharacterRealm`; `AdoptLegacyBinding` is the Hub's
+`AdoptCharacterBinding`. Unit Frames never names a profile after a character, so PLAYER_LOGIN never waits.
+`GU:SetEditing` bails before `initialised`. Next: Hub BACKLOG 29 — the Evoker's EMPOWERED casts on the cast
+ring / bar (`CastState` treats them as a plain channel).
 
 ## ★ THE ONE THING TO READ BEFORE TOUCHING THE RENDERER
 

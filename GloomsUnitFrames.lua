@@ -3036,15 +3036,17 @@ end
 -- The name comes from the Hub: in WoW Forever UnitName is the FIRST name only,
 -- shared by alts, so the Hub appends the character's own ID there (retail: UnitName).
 function GU:CharKey()
-    local name, realm = (GloomsHub and GloomsHub.CharacterKeyName and GloomsHub.CharacterKeyName()) or UnitName("player"), GetRealmName()
+    local name = (GloomsHub and GloomsHub.CharacterKeyName and GloomsHub.CharacterKeyName()) or UnitName("player")
+    local realm = (GloomsHub and GloomsHub.CharacterRealm and GloomsHub.CharacterRealm()) or GetRealmName()
     return (name or "?") .. "-" .. (realm or "?")
 end
 -- A binding saved under the pre-2026-11-16 key (first name only, Forever):
 -- adopt it once, for the first character to log in, then drop the old key.
+-- (and the 2026-11-20 spellings: the realm name, or none — the Hub's helper)
 local function AdoptLegacyBinding()
-    local old = ((GloomsHub and GloomsHub.LegacyCharacterKeyName and GloomsHub.LegacyCharacterKeyName()) or "?") .. "-" .. (GetRealmName() or "?")
-    local key, cp = GU:CharKey(), root and root.charProfiles
-    if cp and old ~= key and cp[key] == nil and cp[old] ~= nil then cp[key] = cp[old]; cp[old] = nil end
+    if GloomsHub and GloomsHub.AdoptCharacterBinding and root then
+        GloomsHub.AdoptCharacterBinding(root.charProfiles, "-", function(p) return root.profiles and root.profiles[p] ~= nil end)
+    end
 end
 
 local function SortedNames(t)
@@ -3309,6 +3311,7 @@ end
 function GU:SetEditing(which)
     if which ~= editing then self:SetDragPiece(nil) end
     editing = which
+    if not initialised then return end   -- no frames yet (a Forever cold login's first ticks)
     for _, u in ipairs(GU.UNITS) do
         local on = (u == which)
         anchors[u]:EnableMouse(on)
@@ -3388,6 +3391,10 @@ local function OnEvent(_, event, unit)
     if event == "PLAYER_LOGIN" then
         GloomsUnitFramesDB = GloomsUnitFramesDB or {}
         root = GloomsUnitFramesDB
+        -- (No wait here: Unit Frames never names a new profile after the
+        -- character, so nothing it needs arrives late — the key is built from
+        -- the GUID, which PLAYER_LOGIN has in both clients.)
+        local function onLogin()
         -- Colors set to "Use Class Color" take THIS character's class, in every
         -- profile, before anything applies them (the Hub's kit). The fill and
         -- text colors' own Class / Power / Resource sources follow the UNIT live.
@@ -3417,6 +3424,8 @@ local function OnEvent(_, event, unit)
         for _, which in ipairs(GU.UNITS) do GU:ApplyLayout(which) end
         -- the frames other tools attach to now exist (the Hub's Anchors.lua)
         if GloomsHub.AnchorsChanged then GloomsHub:AnchorsChanged() end
+        end
+        onLogin()
     elseif event == "PLAYER_MOUNT_DISPLAY_CHANGED" or event == "PLAYER_FOCUS_CHANGED" or event == "UNIT_TARGET" then
         UpdateVisibility()
     elseif event == "UPDATE_SHAPESHIFT_FORMS" then
